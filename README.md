@@ -122,17 +122,26 @@ chmod +x package.sh
 ./package.sh
 ```
 
-In HiveOS Flight Sheet:
-1. Select Coin: **TRU**
-2. Select Wallet: Your TRU Wallet
-3. Pool: **Configure in miner**
-4. Miner: **Custom**
-5. Setup Miner Config:
+### 1-Click HiveOS Setup
+
+1. In HiveOS, create a new **Flight Sheet**:
+   - **Coin**: `TRU`
+   - **Wallet**: Select your TRU payout wallet
+   - **Pool**: `Configure in miner`
+   - **Miner**: `Custom`
+2. Click **Setup Miner Config**:
    - **Miner name**: `powgrid-tru-miner`
-   - **Installation URL**: URL hosting `powgrid-tru-gpu-miner-hiveos.tar.gz`
+   - **Installation URL**:
+     ```
+     https://github.com/PoWGrid/powgrid-tru-gpu-miner/releases/download/v1.1.0/powgrid-tru-gpu-miner-hiveos.tar.gz
+     ```
    - **Hash algorithm**: `truhash`
+   - **Wallet and worker template**: `%WAL%`
+   - **Worker name**: `%WORKER_NAME%`
    - **Pool URL**: `wss://tru.powgrid.xyz/stratum`
    - **Pass**: `x`
+   - *(Optional) Extra config arguments*: `--preset extreme` or `--watt 250`
+3. Click **Apply Changes** and attach Flight Sheet to your rig.
 
 ---
 
