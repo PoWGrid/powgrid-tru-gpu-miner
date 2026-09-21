@@ -1,0 +1,14 @@
+# Rust build artifacts
+/target/
+
+# Binary artifacts & packages
+test_bench
+dist/
+*.ptx
+*.log
+*.tar.gz
+*.zip
+
+# Environment & local credentials
+.env
+*.local
