@@ -166,10 +166,18 @@ STATSEOF
 chmod +x "$PKG_DIR/hiveos/powgrid-tru-miner/h-stats.sh"
 
 # Create archives
+DIST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/dist"
+mkdir -p "$DIST_DIR"
+
 cd "$PKG_DIR/linux-x64"
-tar -czvf /tmp/powgrid-tru-gpu-miner-linux-x64.tar.gz powgrid-tru-gpu-miner
+tar -czvf "$DIST_DIR/powgrid-tru-gpu-miner-linux-x64.tar.gz" powgrid-tru-gpu-miner
+cp -f "$DIST_DIR/powgrid-tru-gpu-miner-linux-x64.tar.gz" /tmp/
 
 cd "$PKG_DIR/hiveos"
-tar -czvf /tmp/powgrid-tru-gpu-miner-hiveos.tar.gz powgrid-tru-miner
+tar -czvf "$DIST_DIR/powgrid-tru-gpu-miner-hiveos.tar.gz" powgrid-tru-miner
+cp -f "$DIST_DIR/powgrid-tru-gpu-miner-hiveos.tar.gz" /tmp/
 
-ls -lh /tmp/powgrid-tru-gpu-miner-*.tar.gz
+echo ""
+echo "=== Packaging Complete ==="
+ls -lh "$DIST_DIR"/powgrid-tru-gpu-miner-*.tar.gz
+
