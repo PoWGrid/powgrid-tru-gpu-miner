@@ -467,7 +467,7 @@ impl Dashboard {
 
         out.push_str(&border_top);
         if self.is_pool_mode {
-            out.push_str(&box_row("\x1b[1;36m► POWGRID TRU ($TRU) HIGH-PERFORMANCE TRUHASH CUDA MINER v1.1\x1b[0m", 74));
+            out.push_str(&box_row("\x1b[1;36m► POWGRID TRU ($TRU) HIGH-PERFORMANCE TRUHASH CUDA MINER v1.2\x1b[0m", 74));
         } else {
             out.push_str(&box_row("\x1b[1;36m► TRU FAT MINER ($TRU) HIGH-SPEED SOLO CUDA ENGINE v2.3\x1b[0m", 74));
         }
@@ -969,7 +969,7 @@ fn run_wss_client(
                     let sub_req = json!({
                         "id": 1,
                         "method": "mining.subscribe",
-                        "params": ["powgrid-tru-gpu-miner/1.0", null]
+                        "params": ["powgrid-tru-gpu-miner/1.2", null]
                     });
                     if write.send(tokio_tungstenite::tungstenite::Message::Text(sub_req.to_string().into())).await.is_err() {
                         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -1317,7 +1317,7 @@ fn main() {
             }
             "--help" | "-h" => {
                 println!("Usage: powgrid-tru-gpu-miner [OPTIONS]");
-                println!("PowGrid TRU GPU Miner v1.1 - Algorithm: TRUHash");
+                println!("PowGrid TRU GPU Miner v1.2 - Algorithm: TRUHash");
                 println!("Options:");
                 println!("  --pool, -o <URL>      Target Pool URL (default: wss://tru.powgrid.xyz/stratum)");
                 println!("  --wallet, -u <ADDR>   TRU payout wallet address (required)");
