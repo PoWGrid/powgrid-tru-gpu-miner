@@ -1464,19 +1464,16 @@ fn main() {
         });
     }
 
-    let worker_ntime_offset: u32 = {
+    let worker_nonce_seed: u32 = {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         std::hash::Hash::hash(&worker_name, &mut hasher);
-        let h = std::hash::Hasher::finish(&hasher);
-        // Map worker into one of 36 non-overlapping 100-second buckets (0..3500s)
-        // This guarantees distinct workers on the same wallet NEVER scan the same nTime epoch.
-        ((h % 36) as u32) * 100
+        std::hash::Hasher::finish(&hasher) as u32
     };
     dashboard.add_event(format!(
-        "[{}] 🧭 Search-space partition: Worker '{}' epoch offset +{}s",
+        "[{}] 🧭 Search-space partition: Worker '{}' noncespace seed {:#010x}",
         get_time_str(),
         worker_name,
-        worker_ntime_offset
+        worker_nonce_seed
     ));
 
     let mut total_hashes = 0u64;
@@ -1491,8 +1488,6 @@ fn main() {
     let mut active_bits_hex = "1d00ffff".to_string();
     let mut active_h80 = [0u8; 80];
     let mut active_job_base_ntime = 0u32;
-    let mut current_ntime_epoch = 0u32;
-    let mut nonce_scanned_in_epoch = 0u64;
     let mut active_midstate = [0u32; 8];
     let mut active_target = [0xffu8; 32];
     let mut active_diff = 0.0f64;
@@ -1552,9 +1547,7 @@ fn main() {
                             active_midstate = j.midstate;
                             active_job_base_ntime = u32::from_le_bytes([j.header80[68], j.header80[69], j.header80[70], j.header80[71]]);
                             submitted_nonces.clear();
-                            start_nonce = rand_u32();
-                            current_ntime_epoch = 0;
-                            nonce_scanned_in_epoch = 0;
+                            start_nonce = rand_u32() ^ worker_nonce_seed;
                         }
                         active_target = j.target_le;
                         active_diff = j.diff;
@@ -1569,28 +1562,20 @@ fn main() {
             continue;
         }
 
-        // Worker-partitioned dynamic nTime rolling:
-        // Guarantees disjoint, non-overlapping search spaces across all rigs on the pool.
-        // Also automatically rolls when a high-speed GPU (>4.3 GH/s) exhausts the 32-bit nonce space.
+        // Synchronized wall-clock nTime tracking:
+        // Follows real wall-clock elapsed seconds since job creation, but NEVER exceeds
+        // real current time (SystemTime::now()) to strictly prevent blockchain MTP / future-time violations.
         let current_unix_sec = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as u32;
 
-        let wall_epoch = current_unix_sec.saturating_sub(active_job_base_ntime);
-        if nonce_scanned_in_epoch >= 4_200_000_000 {
-            current_ntime_epoch = current_ntime_epoch.max(wall_epoch) + 1;
-            nonce_scanned_in_epoch = 0;
-        } else {
-            current_ntime_epoch = current_ntime_epoch.max(wall_epoch);
-        }
-
-        let effective_ntime = active_job_base_ntime + worker_ntime_offset + (current_ntime_epoch % 3600);
+        let effective_ntime = current_unix_sec.max(active_job_base_ntime);
         let active_cur_ntime = u32::from_le_bytes([active_h80[68], active_h80[69], active_h80[70], active_h80[71]]);
         if effective_ntime != active_cur_ntime {
             active_h80[68..72].copy_from_slice(&effective_ntime.to_le_bytes());
             submitted_nonces.clear();
-            nonce_scanned_in_epoch = 0;
+            start_nonce = rand_u32() ^ worker_nonce_seed;
         }
 
         // 3. Run CUDA miner search
@@ -1613,7 +1598,6 @@ fn main() {
 
         start_nonce = start_nonce.wrapping_add(batch_size);
         total_hashes += batch_size as u64;
-        nonce_scanned_in_epoch += batch_size as u64;
 
         let dt = last_stat_tick.elapsed().as_secs_f64();
         if dt >= 0.5 {
