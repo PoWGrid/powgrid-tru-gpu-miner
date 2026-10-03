@@ -27,6 +27,17 @@ fn main() {
         "-std=c++17",
     ]);
 
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    if target_arch == "aarch64" {
+        nvcc_cmd.args(&[
+            "-D__Float32x4_t=int",
+            "-D__Float64x2_t=int",
+            "-D__SVFloat32_t=int",
+            "-D__SVFloat64_t=int",
+            "-D__SVBool_t=int",
+        ]);
+    }
+
     if let Ok(arch_env) = env::var("CUDA_ARCH") {
         let arch = arch_env.trim();
         let virt = if arch.starts_with("sm_") {
