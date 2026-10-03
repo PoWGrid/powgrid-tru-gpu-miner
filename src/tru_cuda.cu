@@ -471,21 +471,21 @@ extern "C" int cuda_miner_get_device_info(int device_id, CudaDeviceInfo* out_inf
     out_info->max_threads_per_block = prop.maxThreadsPerBlock;
 
     if (prop.major >= 12) {
-        snprintf(out_info->arch_name, sizeof(out_info->arch_name), "Blackwell Native (sm_%d%d)", prop.major, prop.minor);
+        snprintf(out_info->arch_name, sizeof(out_info->arch_name), "Blackwell (sm_%d%d)", prop.major, prop.minor);
     } else if (prop.major == 9 && prop.minor == 0 && strstr(prop.name, "50")) {
-        snprintf(out_info->arch_name, sizeof(out_info->arch_name), "Blackwell (Compute %d.%d)", prop.major, prop.minor);
+        snprintf(out_info->arch_name, sizeof(out_info->arch_name), "Blackwell (sm_%d%d)", prop.major, prop.minor);
     } else if (prop.major == 9 && prop.minor == 0) {
         snprintf(out_info->arch_name, sizeof(out_info->arch_name), "Hopper (sm_90)");
     } else if (prop.major == 8 && prop.minor == 9) {
-        snprintf(out_info->arch_name, sizeof(out_info->arch_name), "Ada Lovelace (sm_89)");
+        snprintf(out_info->arch_name, sizeof(out_info->arch_name), "Ada (sm_89)");
     } else if (prop.major == 8 && prop.minor == 6) {
         snprintf(out_info->arch_name, sizeof(out_info->arch_name), "Ampere (sm_86)");
     } else if (prop.major == 8 && prop.minor == 0) {
-        snprintf(out_info->arch_name, sizeof(out_info->arch_name), "Ampere A100 (sm_80)");
+        snprintf(out_info->arch_name, sizeof(out_info->arch_name), "Ampere (sm_80)");
     } else if (prop.major == 7 && prop.minor == 5) {
         snprintf(out_info->arch_name, sizeof(out_info->arch_name), "Turing (sm_75)");
     } else {
-        snprintf(out_info->arch_name, sizeof(out_info->arch_name), "CUDA Compute %d.%d", prop.major, prop.minor);
+        snprintf(out_info->arch_name, sizeof(out_info->arch_name), "sm_%d%d", prop.major, prop.minor);
     }
 
     // Hardware-driven optimal batch size recommendation
