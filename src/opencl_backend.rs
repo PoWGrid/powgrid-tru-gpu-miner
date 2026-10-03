@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
 use std::sync::OnceLock;
@@ -11,13 +9,11 @@ pub type ClUlong = u64;
 pub const CL_DEVICE_TYPE_GPU: ClUlong = 1 << 2;
 pub const CL_DEVICE_NAME: ClUint = 0x102B;
 pub const CL_DEVICE_VENDOR: ClUint = 0x102C;
-pub const CL_DEVICE_GLOBAL_MEM_SIZE: ClUint = 0x101F;
 pub const CL_DEVICE_MAX_COMPUTE_UNITS: ClUint = 0x1002;
 pub const CL_PLATFORM_NAME: ClUint = 0x0902;
 pub const CL_MEM_READ_WRITE: ClUlong = 1 << 0;
 pub const CL_MEM_WRITE_ONLY: ClUlong = 1 << 1;
 pub const CL_MEM_READ_ONLY: ClUlong = 1 << 2;
-pub const CL_MEM_COPY_HOST_PTR: ClUlong = 1 << 5;
 pub const CL_PROGRAM_BUILD_LOG: ClUint = 0x1114;
 pub const CL_TRUE: ClUint = 1;
 
@@ -36,7 +32,6 @@ type PfnClSetKernelArg = unsafe extern "C" fn(*mut c_void, ClUint, usize, *const
 type PfnClEnqueueNDRangeKernel = unsafe extern "C" fn(*mut c_void, *mut c_void, ClUint, *const usize, *const usize, *const usize, ClUint, *const c_void, *mut c_void) -> ClInt;
 type PfnClEnqueueWriteBuffer = unsafe extern "C" fn(*mut c_void, *mut c_void, ClUint, usize, usize, *const c_void, ClUint, *const c_void, *mut c_void) -> ClInt;
 type PfnClEnqueueReadBuffer = unsafe extern "C" fn(*mut c_void, *mut c_void, ClUint, usize, usize, *mut c_void, ClUint, *const c_void, *mut c_void) -> ClInt;
-type PfnClFinish = unsafe extern "C" fn(*mut c_void) -> ClInt;
 type PfnClReleaseMemObject = unsafe extern "C" fn(*mut c_void) -> ClInt;
 type PfnClReleaseKernel = unsafe extern "C" fn(*mut c_void) -> ClInt;
 type PfnClReleaseProgram = unsafe extern "C" fn(*mut c_void) -> ClInt;
@@ -60,7 +55,6 @@ pub struct OpenClLib {
     cl_enqueue_nd_range_kernel: PfnClEnqueueNDRangeKernel,
     cl_enqueue_write_buffer: PfnClEnqueueWriteBuffer,
     cl_enqueue_read_buffer: PfnClEnqueueReadBuffer,
-    cl_finish: PfnClFinish,
     cl_release_mem_object: PfnClReleaseMemObject,
     cl_release_kernel: PfnClReleaseKernel,
     cl_release_program: PfnClReleaseProgram,
@@ -129,7 +123,6 @@ pub fn get_opencl_lib() -> Option<&'static OpenClLib> {
                         cl_enqueue_nd_range_kernel: load_sym!(clEnqueueNDRangeKernel, PfnClEnqueueNDRangeKernel),
                         cl_enqueue_write_buffer: load_sym!(clEnqueueWriteBuffer, PfnClEnqueueWriteBuffer),
                         cl_enqueue_read_buffer: load_sym!(clEnqueueReadBuffer, PfnClEnqueueReadBuffer),
-                        cl_finish: load_sym!(clFinish, PfnClFinish),
                         cl_release_mem_object: load_sym!(clReleaseMemObject, PfnClReleaseMemObject),
                         cl_release_kernel: load_sym!(clReleaseKernel, PfnClReleaseKernel),
                         cl_release_program: load_sym!(clReleaseProgram, PfnClReleaseProgram),
@@ -145,15 +138,10 @@ pub fn get_opencl_lib() -> Option<&'static OpenClLib> {
 
 #[derive(Clone, Debug)]
 pub struct OpenClDeviceInfo {
-    pub platform_idx: usize,
-    pub device_idx: usize,
-    pub platform_id: usize,
     pub device_id: usize,
-    pub platform_name: String,
     pub device_name: String,
     pub vendor: String,
     pub is_nvidia: bool,
-    pub total_mem_bytes: usize,
     pub compute_units: u32,
 }
 
@@ -173,7 +161,7 @@ pub fn get_opencl_devices() -> Vec<OpenClDeviceInfo> {
         let mut platforms = vec![std::ptr::null_mut(); num_platforms as usize];
         (cl.cl_get_platform_ids)(num_platforms, platforms.as_mut_ptr(), std::ptr::null_mut());
 
-        for (p_idx, &p) in platforms.iter().enumerate() {
+        for (_p_idx, &p) in platforms.iter().enumerate() {
             let mut p_name_buf = [0 as c_char; 256];
             (cl.cl_get_platform_info)(p, CL_PLATFORM_NAME, p_name_buf.len(), p_name_buf.as_mut_ptr() as *mut c_void, std::ptr::null_mut());
             let p_name = CStr::from_ptr(p_name_buf.as_ptr()).to_string_lossy().trim().to_string();
@@ -183,7 +171,7 @@ pub fn get_opencl_devices() -> Vec<OpenClDeviceInfo> {
                 let mut devs = vec![std::ptr::null_mut(); num_devices as usize];
                 (cl.cl_get_device_ids)(p, CL_DEVICE_TYPE_GPU, num_devices, devs.as_mut_ptr(), std::ptr::null_mut());
 
-                for (d_idx, &d) in devs.iter().enumerate() {
+                for (_d_idx, &d) in devs.iter().enumerate() {
                     let mut d_name_buf = [0 as c_char; 256];
                     (cl.cl_get_device_info)(d, CL_DEVICE_NAME, d_name_buf.len(), d_name_buf.as_mut_ptr() as *mut c_void, std::ptr::null_mut());
                     let d_name = CStr::from_ptr(d_name_buf.as_ptr()).to_string_lossy().trim().to_string();
@@ -191,9 +179,6 @@ pub fn get_opencl_devices() -> Vec<OpenClDeviceInfo> {
                     let mut d_vendor_buf = [0 as c_char; 256];
                     (cl.cl_get_device_info)(d, CL_DEVICE_VENDOR, d_vendor_buf.len(), d_vendor_buf.as_mut_ptr() as *mut c_void, std::ptr::null_mut());
                     let d_vendor = CStr::from_ptr(d_vendor_buf.as_ptr()).to_string_lossy().trim().to_string();
-
-                    let mut mem_size: ClUlong = 0;
-                    (cl.cl_get_device_info)(d, CL_DEVICE_GLOBAL_MEM_SIZE, 8, &mut mem_size as *mut _ as *mut c_void, std::ptr::null_mut());
 
                     let mut cu: ClUint = 0;
                     (cl.cl_get_device_info)(d, CL_DEVICE_MAX_COMPUTE_UNITS, 4, &mut cu as *mut _ as *mut c_void, std::ptr::null_mut());
@@ -203,15 +188,10 @@ pub fn get_opencl_devices() -> Vec<OpenClDeviceInfo> {
                         || d_vendor.to_lowercase().contains("nvidia");
 
                     devices_list.push(OpenClDeviceInfo {
-                        platform_idx: p_idx,
-                        device_idx: d_idx,
-                        platform_id: p as usize,
                         device_id: d as usize,
-                        platform_name: p_name.clone(),
                         device_name: d_name,
                         vendor: d_vendor,
                         is_nvidia,
-                        total_mem_bytes: mem_size as usize,
                         compute_units: cu,
                     });
                 }

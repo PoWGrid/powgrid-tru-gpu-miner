@@ -688,15 +688,6 @@ unsafe extern "C" {
         result: *mut CudaMiningResult,
     ) -> i32;
     fn cuda_miner_cleanup_device(device_id: i32);
-    #[allow(dead_code)]
-    fn cuda_miner_search(
-        midstate: *const u32,
-        header80: *const u8,
-        target: *const u8,
-        start_nonce: u32,
-        batch_size: u32,
-        result: *mut CudaMiningResult,
-    ) -> i32;
     fn cuda_miner_cleanup();
 }
 
