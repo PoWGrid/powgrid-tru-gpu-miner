@@ -174,7 +174,7 @@ pub fn get_opencl_devices() -> Vec<OpenClDeviceInfo> {
         (cl.cl_get_platform_ids)(num_platforms, platforms.as_mut_ptr(), std::ptr::null_mut());
 
         for (p_idx, &p) in platforms.iter().enumerate() {
-            let mut p_name_buf = [0i8; 256];
+            let mut p_name_buf = [0 as c_char; 256];
             (cl.cl_get_platform_info)(p, CL_PLATFORM_NAME, p_name_buf.len(), p_name_buf.as_mut_ptr() as *mut c_void, std::ptr::null_mut());
             let p_name = CStr::from_ptr(p_name_buf.as_ptr()).to_string_lossy().trim().to_string();
 
@@ -184,11 +184,11 @@ pub fn get_opencl_devices() -> Vec<OpenClDeviceInfo> {
                 (cl.cl_get_device_ids)(p, CL_DEVICE_TYPE_GPU, num_devices, devs.as_mut_ptr(), std::ptr::null_mut());
 
                 for (d_idx, &d) in devs.iter().enumerate() {
-                    let mut d_name_buf = [0i8; 256];
+                    let mut d_name_buf = [0 as c_char; 256];
                     (cl.cl_get_device_info)(d, CL_DEVICE_NAME, d_name_buf.len(), d_name_buf.as_mut_ptr() as *mut c_void, std::ptr::null_mut());
                     let d_name = CStr::from_ptr(d_name_buf.as_ptr()).to_string_lossy().trim().to_string();
 
-                    let mut d_vendor_buf = [0i8; 256];
+                    let mut d_vendor_buf = [0 as c_char; 256];
                     (cl.cl_get_device_info)(d, CL_DEVICE_VENDOR, d_vendor_buf.len(), d_vendor_buf.as_mut_ptr() as *mut c_void, std::ptr::null_mut());
                     let d_vendor = CStr::from_ptr(d_vendor_buf.as_ptr()).to_string_lossy().trim().to_string();
 
