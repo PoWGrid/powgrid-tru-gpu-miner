@@ -150,18 +150,27 @@ except:
 khs=$(python3 -c "print(round(float('$HS') / 1000.0, 2))" 2>/dev/null || echo 0)
 
 stats=$(python3 -c "
-import json
+import json, os
 try:
     hs_arr = json.loads('''$HS_LIST''')
-    if not hs_arr:
-        import subprocess
+    # On mixed AMD/NVIDIA rigs in HiveOS, align hashrates with overall rig GPU indices
+    if os.path.exists('/var/run/hive/gpu-detect.json'):
         try:
-            out_cnt = int(subprocess.check_output('gpu-detect NVIDIA AMD 2>/dev/null | wc -l', shell=True).strip())
-        except:
-            out_cnt = 1
-        gpu_cnt = max(1, out_cnt)
-        per_gpu = round(float('$HS') / gpu_cnt, 2)
-        hs_arr = [per_gpu] * gpu_cnt
+            with open('/var/run/hive/gpu-detect.json') as gf:
+                gpus = json.load(gf)
+            if gpus and isinstance(gpus, list):
+                full_hs = [0] * len(gpus)
+                nv_i = 0
+                for idx, card in enumerate(gpus):
+                    brand = card.get('brand', '').lower()
+                    if brand == 'nvidia':
+                        if nv_i < len(hs_arr):
+                            full_hs[idx] = hs_arr[nv_i]
+                        nv_i += 1
+                hs_arr = full_hs
+        except Exception:
+            pass
+
     out = {
         'hs': hs_arr,
         'hs_units': 'hs',
