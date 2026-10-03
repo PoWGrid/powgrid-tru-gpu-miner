@@ -25,14 +25,71 @@ fn main() {
     nvcc_cmd.args(&[
         "-O3",
         "-std=c++17",
-        "-gencode", "arch=compute_75,code=sm_75",
-        "-gencode", "arch=compute_80,code=sm_80",
-        "-gencode", "arch=compute_86,code=sm_86",
-        "-gencode", "arch=compute_89,code=sm_89",
-        "-gencode", "arch=compute_90,code=sm_90",
-        "-gencode", "arch=compute_120,code=sm_120",
-        "-gencode", "arch=compute_120,code=compute_120",
     ]);
+
+    if let Ok(arch_env) = env::var("CUDA_ARCH") {
+        let arch = arch_env.trim();
+        let virt = if arch.starts_with("sm_") {
+            arch.replace("sm_", "compute_")
+        } else if !arch.starts_with("compute_") {
+            format!("compute_{}", arch)
+        } else {
+            arch.to_string()
+        };
+        let real = if arch.starts_with("compute_") {
+            arch.replace("compute_", "sm_")
+        } else if !arch.starts_with("sm_") {
+            format!("sm_{}", arch)
+        } else {
+            arch.to_string()
+        };
+        nvcc_cmd.args(&["-gencode", &format!("arch={},code={}", virt, real)]);
+        nvcc_cmd.args(&["-gencode", &format!("arch={},code={}", virt, virt)]);
+    } else {
+        // Target all supported Jetson embedded and desktop/server architectures:
+        // - compute_53: Jetson Nano, Jetson TX1 (Maxwell)
+        // - compute_62: Jetson TX2 (Pascal)
+        // - compute_72: Jetson AGX Xavier, Xavier NX (Volta)
+        // - compute_75: Turing (RTX 20xx, GTX 16xx)
+        // - compute_80: Ampere Datacenter (A100)
+        // - compute_86: Ampere Desktop (RTX 30xx)
+        // - compute_87: Jetson AGX Orin, Orin NX, Orin Nano (Ampere)
+        // - compute_89: Ada Lovelace (RTX 40xx)
+        // - compute_90: Hopper Datacenter (H100)
+        // - compute_100: Blackwell Datacenter (B100/B200 / Jetson Thor)
+        // - compute_120: Blackwell Desktop (RTX 50xx)
+        let candidate_arches = [
+            ("compute_53", "sm_53"),
+            ("compute_62", "sm_62"),
+            ("compute_72", "sm_72"),
+            ("compute_75", "sm_75"),
+            ("compute_80", "sm_80"),
+            ("compute_86", "sm_86"),
+            ("compute_87", "sm_87"),
+            ("compute_89", "sm_89"),
+            ("compute_90", "sm_90"),
+            ("compute_100", "sm_100"),
+            ("compute_120", "sm_120"),
+        ];
+
+        let help_output = Command::new(nvcc_path)
+            .arg("--help")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+
+        let mut highest_virtual: Option<&str> = None;
+        for (virt, real) in &candidate_arches {
+            if help_output.is_empty() || help_output.contains(virt) {
+                nvcc_cmd.args(&["-gencode", &format!("arch={},code={}", virt, real)]);
+                highest_virtual = Some(virt);
+            }
+        }
+
+        if let Some(highest) = highest_virtual {
+            nvcc_cmd.args(&["-gencode", &format!("arch={},code={}", highest, highest)]);
+        }
+    }
 
     if is_windows {
         let lib_path = out_dir.join("tru_cuda.lib");
@@ -81,13 +138,20 @@ fn main() {
         }
 
         println!("cargo:rustc-link-search=native={}", out_dir.display());
-        if std::path::Path::new("/usr/local/cuda-13.4/targets/x86_64-linux/lib").exists() {
-            println!("cargo:rustc-link-search=native=/usr/local/cuda-13.4/targets/x86_64-linux/lib");
-        }
-        if std::path::Path::new("/usr/local/cuda-13.4/lib64").exists() {
-            println!("cargo:rustc-link-search=native=/usr/local/cuda-13.4/lib64");
-        } else if std::path::Path::new("/usr/local/cuda/lib64").exists() {
-            println!("cargo:rustc-link-search=native=/usr/local/cuda/lib64");
+        let cuda_lib_dirs = [
+            "/usr/local/cuda-13.4/targets/x86_64-linux/lib",
+            "/usr/local/cuda-13.4/lib64",
+            "/usr/local/cuda/targets/x86_64-linux/lib",
+            "/usr/local/cuda/targets/aarch64-linux/lib",
+            "/usr/local/cuda/lib64",
+            "/usr/local/cuda/lib",
+            "/usr/lib/aarch64-linux-gnu",
+            "/usr/lib/x86_64-linux-gnu",
+        ];
+        for dir in &cuda_lib_dirs {
+            if std::path::Path::new(dir).exists() {
+                println!("cargo:rustc-link-search=native={}", dir);
+            }
         }
         println!("cargo:rustc-link-lib=static=tru_cuda");
         println!("cargo:rustc-link-lib=static=cudart_static");
