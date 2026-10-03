@@ -1,16 +1,5 @@
 use std::time::Instant;
 
-#[repr(C)]
-struct CudaDeviceInfo {
-    name: [u8; 256],
-    arch_name: [u8; 64],
-    sm_count: i32,
-    major: i32,
-    minor: i32,
-    total_memory: u64,
-    recommended_batch_size: u32,
-    max_threads_per_block: u32,
-}
 
 #[repr(C)]
 struct CudaMiningResult {
