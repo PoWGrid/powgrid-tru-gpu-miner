@@ -35,9 +35,24 @@ int cuda_miner_get_device_info(int device_id, CudaDeviceInfo* out_info);
 int cuda_miner_init(int device_id);
 
 // Free CUDA device buffers and streams
+// Search on a specific CUDA device
+int cuda_miner_search_device(
+    int device_id,
+    const uint32_t midstate[8],
+    const uint8_t header80[80],
+    const uint8_t target[32],
+    uint32_t start_nonce,
+    uint32_t batch_size,
+    CudaMiningResult* out_result
+);
+
+// Free specific CUDA device buffers and streams
+void cuda_miner_cleanup_device(int device_id);
+
+// Free all CUDA device buffers and streams
 void cuda_miner_cleanup(void);
 
-// Run a batch of nonces on GPU with continuous streaming
+// Run a batch of nonces on default device (device 0)
 int cuda_miner_search(
     const uint32_t midstate[8],
     const uint8_t header80[80],

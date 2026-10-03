@@ -57,7 +57,7 @@ READEEOF
 # HiveOS files
 cat << 'MANIFEOF' > "$PKG_DIR/hiveos/powgrid-tru-miner/h-manifest.conf"
 CUSTOM_NAME="powgrid-tru-miner"
-CUSTOM_VERSION="1.2"
+CUSTOM_VERSION="1.3"
 CUSTOM_BUILD="1"
 CUSTOM_LOG_BASENAME="/var/log/miner/$CUSTOM_NAME/$CUSTOM_NAME"
 CUSTOM_CONFIG_FILENAME="/hive/miners/custom/$CUSTOM_NAME/powgrid.conf"
@@ -71,9 +71,11 @@ cat << 'CONFEOF' > "$PKG_DIR/hiveos/powgrid-tru-miner/h-config.sh"
 [[ -z $CUSTOM_TEMPLATE ]] && echo "No wallet address specified" && exit 1
 
 POOL_URL="${CUSTOM_URL:-wss://tru.powgrid.xyz/stratum}"
+[[ -z $POOL_URL ]] && POOL_URL="wss://tru.powgrid.xyz/stratum"
 
 WALLET="$CUSTOM_TEMPLATE"
-WORKER="${CUSTOM_WORKER:-%WORKER_NAME%}"
+WORKER="${CUSTOM_WORKER:-$WORKER_NAME}"
+[[ -z $WORKER ]] && WORKER="rig1"
 
 mkdir -p $(dirname "$CUSTOM_CONFIG_FILENAME")
 
@@ -99,6 +101,8 @@ cd `dirname $0`
 . $CUSTOM_CONFIG_FILENAME
 
 mkdir -p /var/log/miner/$CUSTOM_NAME
+
+chmod +x ./powgrid-tru-gpu-miner 2>/dev/null || true
 
 ARGS="--pool ${POOL_URL} --wallet ${WALLET} --worker ${WORKER} --hiveos"
 
@@ -137,30 +141,37 @@ try:
     hs = d.get('hashrate_avg', 0)
     acc = d.get('accepted', 0)
     rej = d.get('rejected', 0)
-    print(f'UPTIME={uptime}; HS={hs}; ACC={acc}; REJ={rej};')
+    hs_list = d.get('hs', [])
+    print(f'UPTIME={uptime}; HS={hs}; ACC={acc}; REJ={rej}; HS_LIST=\'{json.dumps(hs_list)}\';')
 except:
-    print('UPTIME=0; HS=0; ACC=0; REJ=0;')
+    print('UPTIME=0; HS=0; ACC=0; REJ=0; HS_LIST=\'[]\';')
 ")
 
 khs=$(python3 -c "print(round(float('$HS') / 1000.0, 2))" 2>/dev/null || echo 0)
 
-gpu_count=$(gpu-detect NVIDIA AMD 2>/dev/null | wc -l)
-[[ -z $gpu_count || $gpu_count -eq 0 ]] && gpu_count=1
-
 stats=$(python3 -c "
 import json
-hs_val = float('$HS')
-gpu_cnt = int('$gpu_count')
-per_gpu = round(hs_val / max(1, gpu_cnt), 2)
-hs_arr = [per_gpu] * gpu_cnt
-out = {
-    'hs': hs_arr,
-    'hs_units': 'hs',
-    'uptime': int('$UPTIME'),
-    'ar': [int('$ACC'), int('$REJ')],
-    'algo': 'truhash'
-}
-print(json.dumps(out))
+try:
+    hs_arr = json.loads('''$HS_LIST''')
+    if not hs_arr:
+        import subprocess
+        try:
+            out_cnt = int(subprocess.check_output('gpu-detect NVIDIA AMD 2>/dev/null | wc -l', shell=True).strip())
+        except:
+            out_cnt = 1
+        gpu_cnt = max(1, out_cnt)
+        per_gpu = round(float('$HS') / gpu_cnt, 2)
+        hs_arr = [per_gpu] * gpu_cnt
+    out = {
+        'hs': hs_arr,
+        'hs_units': 'hs',
+        'uptime': int('$UPTIME'),
+        'ar': [int('$ACC'), int('$REJ')],
+        'algo': 'truhash'
+    }
+    print(json.dumps(out))
+except Exception:
+    print('null')
 ")
 STATSEOF
 chmod +x "$PKG_DIR/hiveos/powgrid-tru-miner/h-stats.sh"

@@ -64,20 +64,25 @@ __device__ __forceinline__ uint32_t lop3_xor3(uint32_t a, uint32_t b, uint32_t c
     return ret;
 }
 
-// Dual-stream asynchronous pipeline buffers
-static cudaStream_t g_streams[2] = {nullptr, nullptr};
-static int* d_found[2] = {nullptr, nullptr};
-static uint32_t* d_found_nonce[2] = {nullptr, nullptr};
-static uint8_t* d_found_hash[2] = {nullptr, nullptr};
-static uint32_t* d_midstate_both[2] = {nullptr, nullptr};
-static uint8_t* d_target[2] = {nullptr, nullptr};
-static int current_stream_idx = 0;
+// Multi-GPU state support: each CUDA device has independent dual streams and device buffers
+#define MAX_CUDA_DEVICES 32
 
-// Cache template parameters to avoid redundant PCIe transfers
-static uint32_t cached_midstate[8] = {0};
-static uint8_t  cached_header80_slice[12] = {0}; // bytes 64..75 (w0, w1, w2)
-static uint8_t  cached_target[32] = {0};
-static bool     template_initialized = false;
+struct CudaDeviceState {
+    cudaStream_t streams[2] = {nullptr, nullptr};
+    int* d_found[2] = {nullptr, nullptr};
+    uint32_t* d_found_nonce[2] = {nullptr, nullptr};
+    uint8_t* d_found_hash[2] = {nullptr, nullptr};
+    uint32_t* d_midstate_both[2] = {nullptr, nullptr};
+    uint8_t* d_target[2] = {nullptr, nullptr};
+    int current_stream_idx = 0;
+    uint32_t cached_midstate[8] = {0};
+    uint8_t  cached_header80_slice[12] = {0};
+    uint8_t  cached_target[32] = {0};
+    bool template_initialized = false;
+    bool is_initialized = false;
+};
+
+static CudaDeviceState g_dev_states[MAX_CUDA_DEVICES];
 
 // -------------------------------------------------------------
 // 2-WAY INSTRUCTION-LEVEL PARALLEL (ILP) TRU MINER KERNEL
@@ -506,48 +511,157 @@ extern "C" int cuda_miner_get_device_info(int device_id, CudaDeviceInfo* out_inf
 }
 
 extern "C" int cuda_miner_init(int device_id) {
+    if (device_id < 0 || device_id >= MAX_CUDA_DEVICES) return -10;
     cudaError_t err = cudaSetDevice(device_id);
     if (err != cudaSuccess) return -1;
 
     cudaDeviceSetCacheConfig(cudaFuncCachePreferL1);
-
-    for (int s = 0; s < 2; s++) {
-        err = cudaStreamCreateWithFlags(&g_streams[s], cudaStreamNonBlocking);
-        if (err != cudaSuccess) return -2;
-
-        err = cudaMalloc(&d_found[s], sizeof(int));
-        if (err != cudaSuccess) return -3;
-
-        err = cudaMalloc(&d_found_nonce[s], sizeof(uint32_t));
-        if (err != cudaSuccess) return -4;
-
-        err = cudaMalloc(&d_found_hash[s], 32);
-        if (err != cudaSuccess) return -5;
-
-        err = cudaMalloc(&d_midstate_both[s], 16 * sizeof(uint32_t));
-        if (err != cudaSuccess) return -6;
-
-        err = cudaMalloc(&d_target[s], 32);
-        if (err != cudaSuccess) return -7;
-
-        cudaMemsetAsync(d_found[s], 0, sizeof(int), g_streams[s]);
+    CudaDeviceState& st = g_dev_states[device_id];
+    if (st.is_initialized) {
+        return 0;
     }
 
-    template_initialized = false;
-    current_stream_idx = 0;
+    for (int s = 0; s < 2; s++) {
+        err = cudaStreamCreateWithFlags(&st.streams[s], cudaStreamNonBlocking);
+        if (err != cudaSuccess) return -2;
+
+        err = cudaMalloc(&st.d_found[s], sizeof(int));
+        if (err != cudaSuccess) return -3;
+
+        err = cudaMalloc(&st.d_found_nonce[s], sizeof(uint32_t));
+        if (err != cudaSuccess) return -4;
+
+        err = cudaMalloc(&st.d_found_hash[s], 32);
+        if (err != cudaSuccess) return -5;
+
+        err = cudaMalloc(&st.d_midstate_both[s], 16 * sizeof(uint32_t));
+        if (err != cudaSuccess) return -6;
+
+        err = cudaMalloc(&st.d_target[s], 32);
+        if (err != cudaSuccess) return -7;
+
+        cudaMemsetAsync(st.d_found[s], 0, sizeof(int), st.streams[s]);
+    }
+
+    st.template_initialized = false;
+    st.current_stream_idx = 0;
+    st.is_initialized = true;
     return 0;
 }
 
-extern "C" void cuda_miner_cleanup(void) {
+extern "C" void cuda_miner_cleanup_device(int device_id) {
+    if (device_id < 0 || device_id >= MAX_CUDA_DEVICES) return;
+    CudaDeviceState& st = g_dev_states[device_id];
+    if (!st.is_initialized) return;
+
+    cudaSetDevice(device_id);
     for (int s = 0; s < 2; s++) {
-        if (d_found[s]) { cudaFree(d_found[s]); d_found[s] = nullptr; }
-        if (d_found_nonce[s]) { cudaFree(d_found_nonce[s]); d_found_nonce[s] = nullptr; }
-        if (d_found_hash[s]) { cudaFree(d_found_hash[s]); d_found_hash[s] = nullptr; }
-        if (d_midstate_both[s]) { cudaFree(d_midstate_both[s]); d_midstate_both[s] = nullptr; }
-        if (d_target[s]) { cudaFree(d_target[s]); d_target[s] = nullptr; }
-        if (g_streams[s]) { cudaStreamDestroy(g_streams[s]); g_streams[s] = nullptr; }
+        if (st.d_found[s]) { cudaFree(st.d_found[s]); st.d_found[s] = nullptr; }
+        if (st.d_found_nonce[s]) { cudaFree(st.d_found_nonce[s]); st.d_found_nonce[s] = nullptr; }
+        if (st.d_found_hash[s]) { cudaFree(st.d_found_hash[s]); st.d_found_hash[s] = nullptr; }
+        if (st.d_midstate_both[s]) { cudaFree(st.d_midstate_both[s]); st.d_midstate_both[s] = nullptr; }
+        if (st.d_target[s]) { cudaFree(st.d_target[s]); st.d_target[s] = nullptr; }
+        if (st.streams[s]) { cudaStreamDestroy(st.streams[s]); st.streams[s] = nullptr; }
     }
-    template_initialized = false;
+    st.template_initialized = false;
+    st.is_initialized = false;
+}
+
+extern "C" void cuda_miner_cleanup(void) {
+    for (int d = 0; d < MAX_CUDA_DEVICES; d++) {
+        if (g_dev_states[d].is_initialized) {
+            cuda_miner_cleanup_device(d);
+        }
+    }
+}
+
+extern "C" int cuda_miner_search_device(
+    int device_id,
+    const uint32_t midstate[8],
+    const uint8_t header80[80],
+    const uint8_t target[32],
+    uint32_t start_nonce,
+    uint32_t batch_size,
+    CudaMiningResult* out_result
+) {
+    if (device_id < 0 || device_id >= MAX_CUDA_DEVICES) return -10;
+    CudaDeviceState& st = g_dev_states[device_id];
+    if (!st.is_initialized || !out_result) return -1;
+
+    cudaError_t err = cudaSetDevice(device_id);
+    if (err != cudaSuccess) return -1;
+
+    uint32_t w0 = ((uint32_t)header80[64] << 24) | ((uint32_t)header80[65] << 16) |
+                  ((uint32_t)header80[66] << 8)  | ((uint32_t)header80[67]);
+    uint32_t w1 = ((uint32_t)header80[68] << 24) | ((uint32_t)header80[69] << 16) |
+                  ((uint32_t)header80[70] << 8)  | ((uint32_t)header80[71]);
+    uint32_t w2 = ((uint32_t)header80[72] << 24) | ((uint32_t)header80[73] << 16) |
+                  ((uint32_t)header80[74] << 8)  | ((uint32_t)header80[75]);
+
+    bool template_changed = !st.template_initialized ||
+        memcmp(st.cached_midstate, midstate, 32) != 0 ||
+        memcmp(st.cached_header80_slice, &header80[64], 12) != 0 ||
+        memcmp(st.cached_target, target, 32) != 0;
+
+    int s = st.current_stream_idx;
+
+    if (template_changed) {
+        cudaDeviceSynchronize();
+
+        memcpy(st.cached_midstate, midstate, 32);
+        memcpy(st.cached_header80_slice, &header80[64], 12);
+        memcpy(st.cached_target, target, 32);
+        st.template_initialized = true;
+
+        uint32_t h_midstate_both[16];
+        memcpy(&h_midstate_both[0], midstate, 32);
+        host_precompute_s1_r3(midstate, w0, w1, w2, &h_midstate_both[8]);
+
+        for (int step = 0; step < 2; step++) {
+            cudaMemcpy(st.d_midstate_both[step], h_midstate_both, 64, cudaMemcpyHostToDevice);
+            cudaMemcpy(st.d_target[step], target, 32, cudaMemcpyHostToDevice);
+            cudaMemset(st.d_found[step], 0, sizeof(int));
+        }
+        cudaDeviceSynchronize();
+    }
+
+    const int threads_per_block = 256;
+    // 2-Way ILP: each thread handles 2 nonces
+    int num_blocks = ((batch_size / 2) + threads_per_block - 1) / threads_per_block;
+
+    cudaMemsetAsync(st.d_found[s], 0, sizeof(int), st.streams[s]);
+
+    tru_blackwell_kernel_2way<<<num_blocks, threads_per_block, 0, st.streams[s]>>>(
+        st.d_midstate_both[s],
+        w0, w1, w2,
+        start_nonce,
+        batch_size,
+        st.d_target[s],
+        st.d_found[s],
+        st.d_found_nonce[s],
+        st.d_found_hash[s]
+    );
+
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("CUDA kernel launch error on GPU %d: %s\n", device_id, cudaGetErrorString(err));
+        return -2;
+    }
+
+    cudaStreamSynchronize(st.streams[s]);
+
+    cudaMemcpyAsync(&out_result->found, st.d_found[s], sizeof(int), cudaMemcpyDeviceToHost, st.streams[s]);
+    cudaStreamSynchronize(st.streams[s]);
+
+    if (out_result->found) {
+        cudaMemcpyAsync(out_result->hash, st.d_found_hash[s], 32, cudaMemcpyDeviceToHost, st.streams[s]);
+        cudaMemcpyAsync(&out_result->nonce, st.d_found_nonce[s], sizeof(uint32_t), cudaMemcpyDeviceToHost, st.streams[s]);
+        cudaMemsetAsync(st.d_found[s], 0, sizeof(int), st.streams[s]);
+        cudaStreamSynchronize(st.streams[s]);
+    }
+
+    st.current_stream_idx = 1 - st.current_stream_idx;
+    return 0;
 }
 
 extern "C" int cuda_miner_search(
@@ -558,77 +672,5 @@ extern "C" int cuda_miner_search(
     uint32_t batch_size,
     CudaMiningResult* out_result
 ) {
-    if (!d_found[0] || !out_result) return -1;
-
-    uint32_t w0 = ((uint32_t)header80[64] << 24) | ((uint32_t)header80[65] << 16) |
-                  ((uint32_t)header80[66] << 8)  | ((uint32_t)header80[67]);
-    uint32_t w1 = ((uint32_t)header80[68] << 24) | ((uint32_t)header80[69] << 16) |
-                  ((uint32_t)header80[70] << 8)  | ((uint32_t)header80[71]);
-    uint32_t w2 = ((uint32_t)header80[72] << 24) | ((uint32_t)header80[73] << 16) |
-                  ((uint32_t)header80[74] << 8)  | ((uint32_t)header80[75]);
-
-    bool template_changed = !template_initialized ||
-        memcmp(cached_midstate, midstate, 32) != 0 ||
-        memcmp(cached_header80_slice, &header80[64], 12) != 0 ||
-        memcmp(cached_target, target, 32) != 0;
-
-    int s = current_stream_idx;
-
-    if (template_changed) {
-        cudaDeviceSynchronize();
-
-        memcpy(cached_midstate, midstate, 32);
-        memcpy(cached_header80_slice, &header80[64], 12);
-        memcpy(cached_target, target, 32);
-        template_initialized = true;
-
-        uint32_t h_midstate_both[16];
-        memcpy(&h_midstate_both[0], midstate, 32);
-        host_precompute_s1_r3(midstate, w0, w1, w2, &h_midstate_both[8]);
-
-        for (int st = 0; st < 2; st++) {
-            cudaMemcpy(d_midstate_both[st], h_midstate_both, 64, cudaMemcpyHostToDevice);
-            cudaMemcpy(d_target[st], target, 32, cudaMemcpyHostToDevice);
-            cudaMemset(d_found[st], 0, sizeof(int));
-        }
-        cudaDeviceSynchronize();
-    }
-
-    const int threads_per_block = 256;
-    // 2-Way ILP: each thread handles 2 nonces
-    int num_blocks = ((batch_size / 2) + threads_per_block - 1) / threads_per_block;
-
-    cudaMemsetAsync(d_found[s], 0, sizeof(int), g_streams[s]);
-
-    tru_blackwell_kernel_2way<<<num_blocks, threads_per_block, 0, g_streams[s]>>>(
-        d_midstate_both[s],
-        w0, w1, w2,
-        start_nonce,
-        batch_size,
-        d_target[s],
-        d_found[s],
-        d_found_nonce[s],
-        d_found_hash[s]
-    );
-
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-        printf("CUDA kernel launch error: %s\n", cudaGetErrorString(err));
-        return -2;
-    }
-
-    cudaStreamSynchronize(g_streams[s]);
-
-    cudaMemcpyAsync(&out_result->found, d_found[s], sizeof(int), cudaMemcpyDeviceToHost, g_streams[s]);
-    cudaStreamSynchronize(g_streams[s]);
-
-    if (out_result->found) {
-        cudaMemcpyAsync(out_result->hash, d_found_hash[s], 32, cudaMemcpyDeviceToHost, g_streams[s]);
-        cudaMemcpyAsync(&out_result->nonce, d_found_nonce[s], sizeof(uint32_t), cudaMemcpyDeviceToHost, g_streams[s]);
-        cudaMemsetAsync(d_found[s], 0, sizeof(int), g_streams[s]);
-        cudaStreamSynchronize(g_streams[s]);
-    }
-
-    current_stream_idx = 1 - current_stream_idx;
-    return 0;
+    return cuda_miner_search_device(0, midstate, header80, target, start_nonce, batch_size, out_result);
 }
