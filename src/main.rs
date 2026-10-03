@@ -1,4 +1,5 @@
 use serde_json::{json, Value};
+mod opencl_backend;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::io::{IsTerminal, Write};
@@ -481,9 +482,9 @@ impl Dashboard {
 
         out.push_str(&border_top);
         if self.is_pool_mode {
-            out.push_str(&box_row("\x1b[1;36m► POWGRID TRU ($TRU) HIGH-PERFORMANCE TRUHASH CUDA MINER v1.3\x1b[0m", 74));
+            out.push_str(&box_row("\x1b[1;36m► POWGRID TRU ($TRU) HIGH-PERFORMANCE TRUHASH GPU MINER v1.3\x1b[0m", 74));
         } else {
-            out.push_str(&box_row("\x1b[1;36m► TRU FAT MINER ($TRU) HIGH-SPEED SOLO CUDA ENGINE v2.3\x1b[0m", 74));
+            out.push_str(&box_row("\x1b[1;36m► TRU FAT MINER ($TRU) HIGH-SPEED SOLO GPU ENGINE v2.3\x1b[0m", 74));
         }
 
         let pool_display = if self.pool_url.len() > 30 {
@@ -508,7 +509,7 @@ impl Dashboard {
         ));
 
         out.push_str(&border_div);
-        out.push_str(&box_row(&format!("\x1b[1;35mHARDWARE & CUDA ENGINE CONFIGURATION ({} GPUs Active)\x1b[0m", self.gpus.len()), 74));
+        out.push_str(&box_row(&format!("\x1b[1;35mHARDWARE & GPU ENGINE CONFIGURATION ({} GPUs Active)\x1b[0m", self.gpus.len()), 74));
 
         if self.gpus.len() == 1 {
             let gpu = &self.gpus[0];
@@ -522,11 +523,12 @@ impl Dashboard {
             } else {
                 &gpu.name
             };
-            let dev_label = format!("{} ({} SMs)", gpu_trim, gpu.sm_count);
+            let dev_label = format!("{} ({} CUs/SMs)", gpu_trim, gpu.sm_count);
+            let algo_str = format!("TRUHash ({})", gpu.arch_name);
             out.push_str(&two_col_row(
                 &format!("\x1b[90mPrimary GPU:\x1b[0m \x1b[1;37m{}\x1b[0m", dev_label),
                 39,
-                "\x1b[90mAlgorithm  :\x1b[0m \x1b[1;32mTRUHash (CUDA)\x1b[0m",
+                &format!("\x1b[90mAlgorithm  :\x1b[0m \x1b[1;32m{}\x1b[0m", algo_str),
                 74,
             ));
 
@@ -701,6 +703,21 @@ unsafe extern "C" {
 fn c_str_to_string(bytes: &[u8]) -> String {
     let len = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
     String::from_utf8_lossy(&bytes[..len]).to_string()
+}
+
+#[derive(Clone)]
+enum DeviceBackend {
+    Cuda { cuda_id: i32 },
+    OpenCl { ocl_info: opencl_backend::OpenClDeviceInfo },
+}
+
+#[derive(Clone)]
+struct UnifiedDevice {
+    name: String,
+    arch_name: String,
+    sm_count: i32,
+    recommended_batch_size: u32,
+    backend: DeviceBackend,
 }
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
@@ -1360,7 +1377,7 @@ fn main() {
                 println!("  --pool, -o <URL>          Target Pool URL (default: wss://tru.powgrid.xyz/stratum)");
                 println!("  --wallet, -u <ADDR>       TRU payout wallet address (required)");
                 println!("  --worker, -w <NAME>       Worker/Rig name (default: rig-1)");
-                println!("  --gpu, --devices <0,1..>  CUDA device indexes (default: all detected GPUs)");
+                println!("  --gpu, --devices <0,1..>  GPU device indexes (default: all detected NVIDIA / AMD GPUs)");
                 println!("  --preset <NAME>           Tuning preset: auto | extreme | max | balanced");
                 println!("  --batch-size <NUM>        Override nonce batch size (e.g. 33554432)");
                 println!("  --watt <NUM>              Cap GPU power consumption in Watts (e.g. 150)");
@@ -1400,25 +1417,107 @@ fn main() {
         std::process::exit(1);
     }
 
-    let mut total_cuda_devices: i32 = 0;
+    let mut detected_cuda_count: i32 = 0;
     unsafe {
-        let _ = cuda_miner_get_device_count(&mut total_cuda_devices);
+        let _ = cuda_miner_get_device_count(&mut detected_cuda_count);
     }
-    if total_cuda_devices <= 0 {
-        total_cuda_devices = 1;
+    if detected_cuda_count < 0 {
+        detected_cuda_count = 0;
     }
 
-    let active_device_ids: Vec<i32> = match selected_devices_arg {
+    let all_ocl_devices = opencl_backend::get_opencl_devices();
+    let filtered_ocl_devices: Vec<opencl_backend::OpenClDeviceInfo> = all_ocl_devices
+        .into_iter()
+        .filter(|d| detected_cuda_count == 0 || !d.is_nvidia)
+        .collect();
+
+    let mut all_available_devices: Vec<UnifiedDevice> = Vec::new();
+
+    for cuda_id in 0..detected_cuda_count {
+        let mut dev_info = CudaDeviceInfo {
+            name: [0; 256],
+            arch_name: [0; 64],
+            sm_count: 0,
+            major: 0,
+            minor: 0,
+            total_memory: 0,
+            recommended_batch_size: 33_554_432,
+            max_threads_per_block: 256,
+        };
+        let dev_info_ok = unsafe { cuda_miner_get_device_info(cuda_id, &mut dev_info) == 0 };
+        let dev_name = if dev_info_ok {
+            c_str_to_string(&dev_info.name)
+        } else {
+            format!("CUDA GPU #{}", cuda_id)
+        };
+        let arch_name = if dev_info_ok {
+            c_str_to_string(&dev_info.arch_name)
+        } else {
+            "CUDA".to_string()
+        };
+        let recommended_batch_size = if dev_info_ok {
+            dev_info.recommended_batch_size
+        } else {
+            33_554_432
+        };
+        all_available_devices.push(UnifiedDevice {
+            name: dev_name,
+            arch_name,
+            sm_count: dev_info.sm_count,
+            recommended_batch_size,
+            backend: DeviceBackend::Cuda { cuda_id },
+        });
+    }
+
+    for ocl_info in filtered_ocl_devices {
+        let arch_name = if ocl_info.vendor.to_lowercase().contains("amd")
+            || ocl_info.vendor.to_lowercase().contains("advanced micro")
+        {
+            "OpenCL AMD".to_string()
+        } else if ocl_info.vendor.to_lowercase().contains("intel") {
+            "OpenCL Intel".to_string()
+        } else {
+            format!("OpenCL {}", ocl_info.vendor)
+        };
+
+        let recommended_batch_size = if ocl_info.compute_units >= 60 {
+            33_554_432
+        } else if ocl_info.compute_units >= 30 {
+            16_777_216
+        } else {
+            8_388_608
+        };
+
+        all_available_devices.push(UnifiedDevice {
+            name: ocl_info.device_name.clone(),
+            arch_name,
+            sm_count: ocl_info.compute_units as i32,
+            recommended_batch_size,
+            backend: DeviceBackend::OpenCl { ocl_info },
+        });
+    }
+
+    if all_available_devices.is_empty() {
+        all_available_devices.push(UnifiedDevice {
+            name: "CUDA GPU #0".to_string(),
+            arch_name: "CUDA".to_string(),
+            sm_count: 0,
+            recommended_batch_size: 33_554_432,
+            backend: DeviceBackend::Cuda { cuda_id: 0 },
+        });
+    }
+
+    let active_indexes: Vec<usize> = match selected_devices_arg {
         Some(ref s) => {
             let s_lower = s.to_lowercase();
             if s_lower == "all" || s_lower == "*" {
-                (0..total_cuda_devices).collect()
+                (0..all_available_devices.len()).collect()
             } else {
                 let mut list = Vec::new();
                 for part in s.split(',') {
                     let trimmed = part.trim();
-                    if let Ok(id) = trimmed.parse::<i32>() {
-                        if id >= 0 && id < 32 {
+                    if let Ok(id) = trimmed.parse::<usize>() {
+                        if id < all_available_devices.len() {
                             if !list.contains(&id) {
                                 list.push(id);
                             }
@@ -1432,64 +1531,47 @@ fn main() {
                 }
             }
         }
-        None => (0..total_cuda_devices).collect(),
+        None => (0..all_available_devices.len()).collect(),
     };
 
     let mut gpu_telemetry_list = Vec::new();
     let mut gpu_shared_states = Vec::new();
 
-    for &dev_id in &active_device_ids {
-        let mut dev_info = CudaDeviceInfo {
-            name: [0; 256],
-            arch_name: [0; 64],
-            sm_count: 0,
-            major: 0,
-            minor: 0,
-            total_memory: 0,
-            recommended_batch_size: 33_554_432,
-            max_threads_per_block: 256,
-        };
-
-        let dev_info_ok = unsafe { cuda_miner_get_device_info(dev_id, &mut dev_info) == 0 };
-        let dev_name = if dev_info_ok {
-            c_str_to_string(&dev_info.name)
-        } else {
-            format!("GPU #{}", dev_id)
-        };
-        let arch_name = if dev_info_ok {
-            c_str_to_string(&dev_info.arch_name)
-        } else {
-            "CUDA".to_string()
-        };
-
+    for &idx in &active_indexes {
+        let dev = &all_available_devices[idx];
         let batch_size: u32 = match manual_batch_size {
             Some(bs) => bs,
             None => match preset.to_lowercase().as_str() {
                 "extreme" => 134_217_728,
                 "max" => 67_108_864,
                 "balanced" => 33_554_432,
-                _ => {
-                    if dev_info_ok {
-                        dev_info.recommended_batch_size
-                    } else {
-                        33_554_432
-                    }
-                }
+                _ => dev.recommended_batch_size,
             },
         };
 
-        let nvml = NvmlMonitor::new(dev_id as u32);
-        if let Some(w) = manual_watt_limit {
-            nvml.apply_power_limit(dev_id as u32, w);
-        }
+        let nvml = match dev.backend {
+            DeviceBackend::Cuda { cuda_id } => {
+                let mon = NvmlMonitor::new(cuda_id as u32);
+                if let Some(w) = manual_watt_limit {
+                    mon.apply_power_limit(cuda_id as u32, w);
+                }
+                mon
+            }
+            DeviceBackend::OpenCl { .. } => NvmlMonitor {
+                device: std::ptr::null_mut(),
+                fn_temp: None,
+                fn_power: None,
+                fn_set_power: None,
+            },
+        };
 
         let hashes_counter = Arc::new(AtomicU64::new(0));
 
         gpu_telemetry_list.push(GpuDeviceTelemetry {
-            device_id: dev_id,
-            name: dev_name,
-            arch_name,
-            sm_count: dev_info.sm_count,
+            device_id: idx as i32,
+            name: dev.name.clone(),
+            arch_name: dev.arch_name.clone(),
+            sm_count: dev.sm_count,
             batch_size,
             nvml,
             current_mhs: 0.0,
@@ -1497,7 +1579,7 @@ fn main() {
             last_tick_hashes: 0,
         });
 
-        gpu_shared_states.push((dev_id, batch_size, hashes_counter));
+        gpu_shared_states.push((idx, dev.backend.clone(), batch_size, hashes_counter));
     }
 
     let mut clean_pool_url = raw_pool_url.trim().to_string();
@@ -1588,123 +1670,232 @@ fn main() {
     let nonce_counter = Arc::new(AtomicU32::new(rand_u32() ^ worker_nonce_seed));
     let mut worker_handles = Vec::new();
 
-    for (dev_id, batch_size, hashes_counter) in gpu_shared_states.iter() {
-        let dev_id = *dev_id;
+    for (dev_idx, backend, batch_size, hashes_counter) in gpu_shared_states.iter() {
+        let dev_idx = *dev_idx;
+        let backend = backend.clone();
         let batch_size = *batch_size;
         let thread_job_slot = Arc::clone(&job_slot);
         let thread_nonce_counter = Arc::clone(&nonce_counter);
         let thread_hashes_counter = Arc::clone(hashes_counter);
         let thread_share_tx = share_tx.clone();
 
-        let handle = thread::Builder::new()
-            .name(format!("gpu-{}", dev_id))
-            .spawn(move || {
-                let init_code = unsafe { cuda_miner_init(dev_id) };
-                if init_code != 0 {
-                    eprintln!("Failed to initialize CUDA miner on device {} (code {})", dev_id, init_code);
-                    return;
-                }
+        match backend {
+            DeviceBackend::Cuda { cuda_id } => {
+                let handle = thread::Builder::new()
+                    .name(format!("cuda-{}", cuda_id))
+                    .spawn(move || {
+                        let init_code = unsafe { cuda_miner_init(cuda_id) };
+                        if init_code != 0 {
+                            eprintln!("Failed to initialize CUDA miner on device {} (code {})", cuda_id, init_code);
+                            return;
+                        }
 
-                let mut local_job_id = String::new();
-                let mut local_height = 0u32;
-                let mut local_bits_hex = "1d00ffff".to_string();
-                let mut local_h80 = [0u8; 80];
-                let mut local_job_base_ntime = 0u32;
-                let mut local_midstate = [0u32; 8];
-                let mut local_target = [0xffu8; 32];
-                let mut local_diff = 0.0f64;
-                let mut local_job_received_at = Instant::now();
-                let mut local_submitted_nonces = HashSet::<u32>::new();
+                        let mut local_job_id = String::new();
+                        let mut local_height = 0u32;
+                        let mut local_bits_hex = "1d00ffff".to_string();
+                        let mut local_h80 = [0u8; 80];
+                        let mut local_job_base_ntime = 0u32;
+                        let mut local_midstate = [0u32; 8];
+                        let mut local_target = [0xffu8; 32];
+                        let mut local_diff = 0.0f64;
+                        let mut local_job_received_at = Instant::now();
+                        let mut local_submitted_nonces = HashSet::<u32>::new();
 
-                while RUNNING.load(Ordering::Relaxed) {
-                    {
-                        if let Ok(lock) = thread_job_slot.read() {
-                            if let Some(ref j) = *lock {
-                                let job_changed = j.job_id != local_job_id;
-                                let diff_changed = (j.diff - local_diff).abs() > 0.0001;
+                        while RUNNING.load(Ordering::Relaxed) {
+                            {
+                                if let Ok(lock) = thread_job_slot.read() {
+                                    if let Some(ref j) = *lock {
+                                        let job_changed = j.job_id != local_job_id;
+                                        let diff_changed = (j.diff - local_diff).abs() > 0.0001;
 
-                                if job_changed || diff_changed {
-                                    if job_changed {
-                                        local_job_id = j.job_id.clone();
-                                        local_height = j.height;
-                                        local_bits_hex = j.bits_hex.clone();
-                                        local_h80 = j.header80;
-                                        local_midstate = j.midstate;
-                                        local_job_base_ntime = u32::from_le_bytes([j.header80[68], j.header80[69], j.header80[70], j.header80[71]]);
-                                        local_job_received_at = Instant::now();
-                                        local_submitted_nonces.clear();
+                                        if job_changed || diff_changed {
+                                            if job_changed {
+                                                local_job_id = j.job_id.clone();
+                                                local_height = j.height;
+                                                local_bits_hex = j.bits_hex.clone();
+                                                local_h80 = j.header80;
+                                                local_midstate = j.midstate;
+                                                local_job_base_ntime = u32::from_le_bytes([j.header80[68], j.header80[69], j.header80[70], j.header80[71]]);
+                                                local_job_received_at = Instant::now();
+                                                local_submitted_nonces.clear();
+                                            }
+                                            local_target = j.target_le;
+                                            local_diff = j.diff;
+                                        }
                                     }
-                                    local_target = j.target_le;
-                                    local_diff = j.diff;
+                                }
+                            }
+
+                            if local_job_id.is_empty() {
+                                thread::sleep(Duration::from_millis(30));
+                                continue;
+                            }
+
+                            let elapsed_sec = local_job_received_at.elapsed().as_secs() as u32;
+                            let effective_ntime = local_job_base_ntime.saturating_add(elapsed_sec.min(55));
+                            let active_cur_ntime = u32::from_le_bytes([local_h80[68], local_h80[69], local_h80[70], local_h80[71]]);
+                            if effective_ntime != active_cur_ntime {
+                                local_h80[68..72].copy_from_slice(&effective_ntime.to_le_bytes());
+                                local_submitted_nonces.clear();
+                            }
+
+                            let start_nonce = thread_nonce_counter.fetch_add(batch_size, Ordering::Relaxed);
+
+                            let mut res = CudaMiningResult {
+                                found: 0,
+                                nonce: 0,
+                                hash: [0; 32],
+                            };
+
+                            unsafe {
+                                cuda_miner_search_device(
+                                    cuda_id,
+                                    local_midstate.as_ptr(),
+                                    local_h80.as_ptr(),
+                                    local_target.as_ptr(),
+                                    start_nonce,
+                                    batch_size,
+                                    &mut res,
+                                );
+                            }
+
+                            thread_hashes_counter.fetch_add(batch_size as u64, Ordering::Relaxed);
+
+                            if res.found != 0 && local_submitted_nonces.insert(res.nonce) {
+                                let mut check_h80 = local_h80;
+                                check_h80[76..80].copy_from_slice(&res.nonce.to_le_bytes());
+                                let verified_hash = compute_tru_hash(&check_h80);
+
+                                if compare256_le(&verified_hash, &local_target) {
+                                    let current_ntime = u32::from_le_bytes([local_h80[68], local_h80[69], local_h80[70], local_h80[71]]);
+                                    let bits = u32::from_str_radix(&local_bits_hex, 16)
+                                        .unwrap_or_else(|_| u32::from_le_bytes([local_h80[72], local_h80[73], local_h80[74], local_h80[75]]));
+                                    let block_target = bits_to_target_le(bits);
+                                    let is_block = compare256_le(&verified_hash, &block_target);
+
+                                    let _ = thread_share_tx.send(ShareSubmission {
+                                        job_id: local_job_id.clone(),
+                                        nonce: res.nonce,
+                                        ntime: current_ntime,
+                                        hashrate: 0.0,
+                                        is_block,
+                                        height: local_height,
+                                    });
                                 }
                             }
                         }
-                    }
 
-                    if local_job_id.is_empty() {
-                        thread::sleep(Duration::from_millis(30));
-                        continue;
-                    }
+                        unsafe { cuda_miner_cleanup_device(cuda_id) };
+                    });
 
-                    let elapsed_sec = local_job_received_at.elapsed().as_secs() as u32;
-                    let effective_ntime = local_job_base_ntime.saturating_add(elapsed_sec.min(55));
-                    let active_cur_ntime = u32::from_le_bytes([local_h80[68], local_h80[69], local_h80[70], local_h80[71]]);
-                    if effective_ntime != active_cur_ntime {
-                        local_h80[68..72].copy_from_slice(&effective_ntime.to_le_bytes());
-                        local_submitted_nonces.clear();
-                    }
-
-                    let start_nonce = thread_nonce_counter.fetch_add(batch_size, Ordering::Relaxed);
-
-                    let mut res = CudaMiningResult {
-                        found: 0,
-                        nonce: 0,
-                        hash: [0; 32],
-                    };
-
-                    unsafe {
-                        cuda_miner_search_device(
-                            dev_id,
-                            local_midstate.as_ptr(),
-                            local_h80.as_ptr(),
-                            local_target.as_ptr(),
-                            start_nonce,
-                            batch_size,
-                            &mut res,
-                        );
-                    }
-
-                    thread_hashes_counter.fetch_add(batch_size as u64, Ordering::Relaxed);
-
-                    if res.found != 0 && local_submitted_nonces.insert(res.nonce) {
-                        let mut check_h80 = local_h80;
-                        check_h80[76..80].copy_from_slice(&res.nonce.to_le_bytes());
-                        let verified_hash = compute_tru_hash(&check_h80);
-
-                        if compare256_le(&verified_hash, &local_target) {
-                            let current_ntime = u32::from_le_bytes([local_h80[68], local_h80[69], local_h80[70], local_h80[71]]);
-                            let bits = u32::from_str_radix(&local_bits_hex, 16)
-                                .unwrap_or_else(|_| u32::from_le_bytes([local_h80[72], local_h80[73], local_h80[74], local_h80[75]]));
-                            let block_target = bits_to_target_le(bits);
-                            let is_block = compare256_le(&verified_hash, &block_target);
-
-                            let _ = thread_share_tx.send(ShareSubmission {
-                                job_id: local_job_id.clone(),
-                                nonce: res.nonce,
-                                ntime: current_ntime,
-                                hashrate: 0.0,
-                                is_block,
-                                height: local_height,
-                            });
-                        }
-                    }
+                if let Ok(h) = handle {
+                    worker_handles.push(h);
                 }
+            }
+            DeviceBackend::OpenCl { ocl_info } => {
+                let handle = thread::Builder::new()
+                    .name(format!("opencl-{}", dev_idx))
+                    .spawn(move || {
+                        let mut ocl_worker = match opencl_backend::OpenClWorker::new(&ocl_info) {
+                            Ok(w) => w,
+                            Err(e) => {
+                                eprintln!("Failed to initialize OpenCL worker on device '{}': {}", ocl_info.device_name, e);
+                                return;
+                            }
+                        };
 
-                unsafe { cuda_miner_cleanup_device(dev_id) };
-            });
+                        let mut local_job_id = String::new();
+                        let mut local_height = 0u32;
+                        let mut local_bits_hex = "1d00ffff".to_string();
+                        let mut local_h80 = [0u8; 80];
+                        let mut local_job_base_ntime = 0u32;
+                        let mut local_midstate = [0u32; 8];
+                        let mut local_target = [0xffu8; 32];
+                        let mut local_diff = 0.0f64;
+                        let mut local_job_received_at = Instant::now();
+                        let mut local_submitted_nonces = HashSet::<u32>::new();
 
-        if let Ok(h) = handle {
-            worker_handles.push(h);
+                        while RUNNING.load(Ordering::Relaxed) {
+                            {
+                                if let Ok(lock) = thread_job_slot.read() {
+                                    if let Some(ref j) = *lock {
+                                        let job_changed = j.job_id != local_job_id;
+                                        let diff_changed = (j.diff - local_diff).abs() > 0.0001;
+
+                                        if job_changed || diff_changed {
+                                            if job_changed {
+                                                local_job_id = j.job_id.clone();
+                                                local_height = j.height;
+                                                local_bits_hex = j.bits_hex.clone();
+                                                local_h80 = j.header80;
+                                                local_midstate = j.midstate;
+                                                local_job_base_ntime = u32::from_le_bytes([j.header80[68], j.header80[69], j.header80[70], j.header80[71]]);
+                                                local_job_received_at = Instant::now();
+                                                local_submitted_nonces.clear();
+                                            }
+                                            local_target = j.target_le;
+                                            local_diff = j.diff;
+                                        }
+                                    }
+                                }
+                            }
+
+                            if local_job_id.is_empty() {
+                                thread::sleep(Duration::from_millis(30));
+                                continue;
+                            }
+
+                            let elapsed_sec = local_job_received_at.elapsed().as_secs() as u32;
+                            let effective_ntime = local_job_base_ntime.saturating_add(elapsed_sec.min(55));
+                            let active_cur_ntime = u32::from_le_bytes([local_h80[68], local_h80[69], local_h80[70], local_h80[71]]);
+                            if effective_ntime != active_cur_ntime {
+                                local_h80[68..72].copy_from_slice(&effective_ntime.to_le_bytes());
+                                local_submitted_nonces.clear();
+                            }
+
+                            let start_nonce = thread_nonce_counter.fetch_add(batch_size, Ordering::Relaxed);
+
+                            let search_res = ocl_worker.search(
+                                &local_midstate,
+                                &local_h80,
+                                &local_target,
+                                start_nonce,
+                                batch_size,
+                            );
+
+                            thread_hashes_counter.fetch_add(batch_size as u64, Ordering::Relaxed);
+
+                            if let Ok(Some((nonce, _hash))) = search_res {
+                                if local_submitted_nonces.insert(nonce) {
+                                    let mut check_h80 = local_h80;
+                                    check_h80[76..80].copy_from_slice(&nonce.to_le_bytes());
+                                    let verified_hash = compute_tru_hash(&check_h80);
+
+                                    if compare256_le(&verified_hash, &local_target) {
+                                        let current_ntime = u32::from_le_bytes([local_h80[68], local_h80[69], local_h80[70], local_h80[71]]);
+                                        let bits = u32::from_str_radix(&local_bits_hex, 16)
+                                            .unwrap_or_else(|_| u32::from_le_bytes([local_h80[72], local_h80[73], local_h80[74], local_h80[75]]));
+                                        let block_target = bits_to_target_le(bits);
+                                        let is_block = compare256_le(&verified_hash, &block_target);
+
+                                        let _ = thread_share_tx.send(ShareSubmission {
+                                            job_id: local_job_id.clone(),
+                                            nonce,
+                                            ntime: current_ntime,
+                                            hashrate: 0.0,
+                                            is_block,
+                                            height: local_height,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    });
+
+                if let Ok(h) = handle {
+                    worker_handles.push(h);
+                }
+            }
         }
     }
 
@@ -1765,7 +1956,7 @@ fn main() {
 
         let dt = last_stat_tick.elapsed().as_secs_f64();
         if dt >= 0.5 {
-            for (idx, (_, _, hashes_counter)) in gpu_shared_states.iter().enumerate() {
+            for (idx, (_, _, _, hashes_counter)) in gpu_shared_states.iter().enumerate() {
                 if let Some(gpu) = dashboard.gpus.get_mut(idx) {
                     let cur_h = hashes_counter.load(Ordering::Relaxed);
                     let diff_h = cur_h.saturating_sub(gpu.last_tick_hashes);
