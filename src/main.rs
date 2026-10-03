@@ -291,11 +291,26 @@ fn box_row(content: &str, inner_width: usize) -> String {
 
 fn two_col_row(left: &str, left_col_width: usize, right: &str, inner_width: usize) -> String {
     let l_vlen = visible_len(left);
-    let l_pad = if l_vlen < left_col_width { left_col_width - l_vlen } else { 2 };
+    let (clean_left, l_vlen) = if l_vlen > left_col_width.saturating_sub(1) {
+        let t = truncate_visible(left, left_col_width.saturating_sub(1));
+        let len = visible_len(&t);
+        (t, len)
+    } else {
+        (left.to_string(), l_vlen)
+    };
+    let l_pad = if l_vlen < left_col_width { left_col_width - l_vlen } else { 1 };
     let r_vlen = visible_len(right);
+    let max_r = inner_width.saturating_sub(l_vlen + l_pad);
+    let (clean_right, r_vlen) = if r_vlen > max_r {
+        let t = truncate_visible(right, max_r);
+        let len = visible_len(&t);
+        (t, len)
+    } else {
+        (right.to_string(), r_vlen)
+    };
     let total_used = l_vlen + l_pad + r_vlen;
     let r_pad = if total_used < inner_width { inner_width - total_used } else { 0 };
-    format!("│ {}{}{}{} │\x1b[K\n", left, " ".repeat(l_pad), right, " ".repeat(r_pad))
+    format!("│ {}{}{}{} │\x1b[K\n", clean_left, " ".repeat(l_pad), clean_right, " ".repeat(r_pad))
 }
 
 fn format_number(n: u64) -> String {
@@ -523,8 +538,33 @@ impl Dashboard {
             } else {
                 &gpu.name
             };
-            let dev_label = format!("{} ({} CUs/SMs)", gpu_trim, gpu.sm_count);
-            let algo_str = format!("TRUHash ({})", gpu.arch_name);
+            let sm_unit = if gpu.arch_name.contains("OpenCL") || gpu.arch_name.contains("AMD") || gpu.arch_name.contains("Intel") {
+                "CUs"
+            } else {
+                "SMs"
+            };
+            let sm_suffix = format!("({} {})", gpu.sm_count, sm_unit);
+            let max_name = 24usize.saturating_sub(sm_suffix.len() + 1);
+            let name_clean = if gpu_trim.len() > max_name { &gpu_trim[..max_name] } else { gpu_trim };
+            let dev_label = format!("{} {}", name_clean, sm_suffix);
+
+            let arch_clean = if gpu.arch_name.contains("Blackwell") {
+                "Blackwell"
+            } else if gpu.arch_name.contains("Ada") {
+                "Ada"
+            } else if gpu.arch_name.contains("Ampere") {
+                "Ampere"
+            } else if gpu.arch_name.contains("Hopper") {
+                "Hopper"
+            } else if gpu.arch_name.contains("Turing") {
+                "Turing"
+            } else if let Some(first) = gpu.arch_name.split('(').next() {
+                let trimmed = first.trim();
+                if trimmed.is_empty() { "CUDA" } else if trimmed.len() > 12 { &trimmed[..12] } else { trimmed }
+            } else {
+                "CUDA"
+            };
+            let algo_str = format!("TRUHash ({})", arch_clean);
             out.push_str(&two_col_row(
                 &format!("\x1b[90mPrimary GPU:\x1b[0m \x1b[1;37m{}\x1b[0m", dev_label),
                 39,
@@ -609,16 +649,31 @@ impl Dashboard {
             0.0
         };
 
-        out.push_str(&two_col_row(
-            &format!("\x1b[90mShares(Pool)   :\x1b[0m \x1b[1;32m{} Acc\x1b[0m ({:.1}%) / \x1b[1;31m{} Rej\x1b[0m ({:.1}%)",
-                self.accepted_shares, acc_pct, self.rejected_shares, rej_pct),
-            46,
-            &format!("\x1b[90mBlocks Found:\x1b[0m \x1b[1;33m★ {}\x1b[0m", blocks_found),
-            74,
-        ));
+        if self.is_pool_mode {
+            let rej_color = if self.rejected_shares > 0 { "\x1b[1;31m" } else { "\x1b[1;32m" };
+            out.push_str(&two_col_row(
+                &format!("\x1b[90mShares (Acc)   :\x1b[0m \x1b[1;32m{}\x1b[0m ({:.1}%)", self.accepted_shares, acc_pct),
+                39,
+                &format!("\x1b[90mRejected    :\x1b[0m {}{}\x1b[0m ({:.1}%)", rej_color, self.rejected_shares, rej_pct),
+                74,
+            ));
+        } else {
+            out.push_str(&two_col_row(
+                &format!("\x1b[90mTotal Hashes   :\x1b[0m \x1b[1;37m{}\x1b[0m", format_number(total_hashes)),
+                39,
+                &format!("\x1b[90mHeight      :\x1b[0m \x1b[1;33m#{}\x1b[0m", current_height),
+                74,
+            ));
+        }
+
+        let blocks_str = if blocks_found > 0 {
+            format!("\x1b[1;93m★ {} BLOCK{}\x1b[0m", blocks_found, if blocks_found > 1 { "S" } else { "" })
+        } else {
+            "\x1b[1;37m★ 0\x1b[0m \x1b[90m(hunting)\x1b[0m".to_string()
+        };
 
         out.push_str(&two_col_row(
-            &format!("\x1b[90mTotal Hashes   :\x1b[0m \x1b[37m{}\x1b[0m", format_number(total_hashes)),
+            &format!("\x1b[90mBlocks Found   :\x1b[0m {}", blocks_str),
             39,
             &format!("\x1b[90mBlock Height:\x1b[0m \x1b[1;36m#{}\x1b[0m", current_height),
             74,
@@ -1990,4 +2045,90 @@ fn main() {
         std::io::stdout().flush().ok();
     }
     println!("PowGrid TRU GPU miner stopped cleanly.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_two_col_row_exact_fit() {
+        let left = format!("\x1b[90mPrimary GPU:\x1b[0m \x1b[1;37m{}\x1b[0m", "RTX 5060 Laptop (26 SMs)");
+        let right = format!("\x1b[90mAlgorithm  :\x1b[0m \x1b[1;32m{}\x1b[0m", "TRUHash (Blackwell)");
+        let row = two_col_row(&left, 39, &right, 74);
+        let trimmed = row.trim_end_matches("\x1b[K\n");
+        assert_eq!(visible_len(trimmed), 78);
+        assert!(trimmed.starts_with("│ "));
+        assert!(trimmed.ends_with(" │"));
+    }
+
+    #[test]
+    fn test_shares_and_blocks_row() {
+        let left = format!("\x1b[90mShares (Acc)   :\x1b[0m \x1b[1;32m{}\x1b[0m ({:.1}%)", 20, 100.0);
+        let right = format!("\x1b[90mRejected    :\x1b[0m \x1b[1;32m{}\x1b[0m ({:.1}%)", 0, 0.0);
+        let row = two_col_row(&left, 39, &right, 74);
+        let trimmed = row.trim_end_matches("\x1b[K\n");
+        assert_eq!(visible_len(trimmed), 78);
+        assert!(trimmed.starts_with("│ "));
+        assert!(trimmed.ends_with(" │"));
+
+        let left_b = format!("\x1b[90mBlocks Found   :\x1b[0m \x1b[1;37m★ 0\x1b[0m \x1b[90m(hunting)\x1b[0m");
+        let right_b = format!("\x1b[90mBlock Height:\x1b[0m \x1b[1;36m#{}\x1b[0m", 27732);
+        let row_b = two_col_row(&left_b, 39, &right_b, 74);
+        let trimmed_b = row_b.trim_end_matches("\x1b[K\n");
+        assert_eq!(visible_len(trimmed_b), 78);
+        assert!(trimmed_b.starts_with("│ "));
+        assert!(trimmed_b.ends_with(" │"));
+    }
+
+    #[test]
+    fn test_two_col_row_defensive_clamp() {
+        // Very long left and right strings
+        let left = "Primary GPU: An Extremely Long GPU Name That Definitely Exceeds 39 Characters";
+        let right = "Algorithm  : Super Long Algorithm Name Exceeding Whatever Space Is Left";
+        let row = two_col_row(left, 39, right, 74);
+        let trimmed = row.trim_end_matches("\x1b[K\n");
+        assert_eq!(visible_len(trimmed), 78);
+        assert!(trimmed.starts_with("│ "));
+        assert!(trimmed.ends_with(" │"));
+    }
+
+    #[test]
+    fn test_full_box_symmetry() {
+        let border_top = format!("╭{}╮", "─".repeat(76));
+        let border_div = format!("├{}┤", "─".repeat(76));
+        let border_bot = format!("╰{}╯", "─".repeat(76));
+
+        assert_eq!(visible_len(&border_top), 78);
+        assert_eq!(visible_len(&border_div), 78);
+        assert_eq!(visible_len(&border_bot), 78);
+
+        let lines = vec![
+            box_row("\x1b[1;36m► POWGRID TRU ($TRU) HIGH-PERFORMANCE TRUHASH GPU MINER v1.3\x1b[0m", 74),
+            two_col_row("\x1b[90mPool:\x1b[0m \x1b[1;37mwss://tru.powgrid.xyz/stratum\x1b[0m", 39, "\x1b[90mStatus:\x1b[0m \x1b[1;32m● ONLINE (Connected)\x1b[0m", 74),
+            two_col_row("\x1b[90mWallet:\x1b[0m \x1b[36mTHoa1wiN6U...cJ1e\x1b[0m", 39, "\x1b[90mWorker:\x1b[0m \x1b[1;33mlaptop\x1b[0m \x1b[90m(PPLNS Pool)\x1b[0m", 74),
+            box_row("\x1b[1;35mHARDWARE & GPU ENGINE CONFIGURATION (1 GPUs Active)\x1b[0m", 74),
+            two_col_row("\x1b[90mPrimary GPU:\x1b[0m \x1b[1;37mRTX 5060 Laptop (26 SMs)\x1b[0m", 39, "\x1b[90mAlgorithm  :\x1b[0m \x1b[1;32mTRUHash (Blackwell)\x1b[0m", 74),
+            two_col_row("\x1b[90mTelemetry  :\x1b[0m \x1b[1;32m68\x1b[0m°C | 45W | \x1b[1;36m34.2\x1b[0m MH/W", 39, "\x1b[90mBatch Size :\x1b[0m \x1b[1;33m33M\x1b[0m (auto)", 74),
+            box_row("\x1b[1;33mMINING TELEMETRY\x1b[0m", 74),
+            two_col_row("\x1b[90mHashrate(Now)  :\x1b[0m \x1b[1;32m1540.49 MH/s\x1b[0m", 39, "\x1b[90mUptime      :\x1b[0m \x1b[1;37m00:00:03\x1b[0m", 74),
+            two_col_row("\x1b[90mHashrate(Avg)  :\x1b[0m \x1b[1;32m1169.95 MH/s\x1b[0m", 39, "\x1b[90mTarget Diff :\x1b[0m \x1b[1;36m1.80 (Vardiff)\x1b[0m", 74),
+            two_col_row("\x1b[90mShares (Acc)   :\x1b[0m \x1b[1;32m20\x1b[0m (100.0%)", 39, "\x1b[90mRejected    :\x1b[0m \x1b[1;32m0\x1b[0m (0.0%)", 74),
+            two_col_row("\x1b[90mBlocks Found   :\x1b[0m \x1b[1;37m★ 0\x1b[0m \x1b[90m(hunting)\x1b[0m", 39, "\x1b[90mBlock Height:\x1b[0m \x1b[1;36m#27732\x1b[0m", 74),
+            box_row("\x1b[1;34mRECENT MINING & NETWORK EVENTS\x1b[0m", 74),
+            box_row("[18:54:54] 🟢 Share ACCEPTED (diff 1.80)", 74),
+            box_row("[18:54:54] ⚡ New block #27732 work template (diff: 1.80)", 74),
+            box_row("[18:54:53] ⚡ Connected to WSS Stratum! Subscribing...", 74),
+            box_row("[18:54:53] 🌐 Connecting to Stratum WSS: wss://tru.powgrid.xyz/stratum", 74),
+            box_row("[18:54:53] 🚀 Initialized PowGrid TRU GPU Miner v1.3 (1 GPU active)", 74),
+        ];
+
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_end_matches("\x1b[K\n");
+            let vlen = visible_len(trimmed);
+            assert_eq!(vlen, 78, "Line {} has wrong visible length {}: {:?}", i, vlen, trimmed);
+            assert!(trimmed.starts_with("│ "), "Line {} does not start with '│ ': {:?}", i, trimmed);
+            assert!(trimmed.ends_with(" │"), "Line {} does not end with ' │': {:?}", i, trimmed);
+        }
+    }
 }
