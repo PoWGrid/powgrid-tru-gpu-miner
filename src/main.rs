@@ -497,7 +497,7 @@ impl Dashboard {
 
         out.push_str(&border_top);
         if self.is_pool_mode {
-            out.push_str(&box_row("\x1b[1;36m► POWGRID TRU ($TRU) HIGH-PERFORMANCE TRUHASH GPU MINER v1.3\x1b[0m", 74));
+            out.push_str(&box_row("\x1b[1;36m► POWGRID TRU ($TRU) HIGH-PERFORMANCE TRUHASH GPU MINER v1.3.1\x1b[0m", 74));
         } else {
             out.push_str(&box_row("\x1b[1;36m► TRU FAT MINER ($TRU) HIGH-SPEED SOLO GPU ENGINE v2.3\x1b[0m", 74));
         }
@@ -1212,29 +1212,47 @@ fn run_wss_client(
                             let _ = feedback_tx.send(PoolFeedback::StatusEvent {
                                 message: format!("[{}] ⚠️ WSS disconnected, reconnecting in 2s...", get_time_str()),
                             });
+                            tokio::time::sleep(Duration::from_secs(2)).await;
                         }
                         _ = async {
-                            while let Some(share) = share_rx.recv().await {
-                                req_id += 1;
-                                if let Ok(mut m) = pending_submits.lock() {
-                                    if m.len() > 1000 {
-                                        m.clear();
+                            let mut ping_interval = tokio::time::interval(Duration::from_secs(20));
+                            ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                            ping_interval.tick().await;
+
+                            loop {
+                                tokio::select! {
+                                    _ = ping_interval.tick() => {
+                                        if write.send(tokio_tungstenite::tungstenite::Message::Ping(vec![].into())).await.is_err() {
+                                            break;
+                                        }
                                     }
-                                    m.insert(req_id, (share.is_block, share.height));
-                                }
-                                let submit_msg = json!({
-                                    "id": req_id,
-                                    "method": "mining.submit",
-                                    "params": [
-                                        user_pass_submit,
-                                        share.job_id,
-                                        "",
-                                        format!("0x{:08x}", share.ntime),
-                                        format!("0x{:08x}", share.nonce)
-                                    ]
-                                });
-                                if write.send(tokio_tungstenite::tungstenite::Message::Text(submit_msg.to_string().into())).await.is_err() {
-                                    break;
+                                    share_opt = share_rx.recv() => {
+                                        let share = match share_opt {
+                                            Some(s) => s,
+                                            None => break,
+                                        };
+                                        req_id += 1;
+                                        if let Ok(mut m) = pending_submits.lock() {
+                                            if m.len() > 1000 {
+                                                m.clear();
+                                            }
+                                            m.insert(req_id, (share.is_block, share.height));
+                                        }
+                                        let submit_msg = json!({
+                                            "id": req_id,
+                                            "method": "mining.submit",
+                                            "params": [
+                                                user_pass_submit,
+                                                share.job_id,
+                                                "",
+                                                format!("0x{:08x}", share.ntime),
+                                                format!("0x{:08x}", share.nonce)
+                                            ]
+                                        });
+                                        if write.send(tokio_tungstenite::tungstenite::Message::Text(submit_msg.to_string().into())).await.is_err() {
+                                            break;
+                                        }
+                                    }
                                 }
                             }
                         } => {}
@@ -1418,7 +1436,7 @@ fn main() {
             }
             "--help" | "-h" => {
                 println!("Usage: powgrid-tru-gpu-miner [OPTIONS]");
-                println!("PowGrid TRU GPU Miner v1.3 - Algorithm: TRUHash");
+                println!("PowGrid TRU GPU Miner v1.3.1 - Algorithm: TRUHash");
                 println!("Options:");
                 println!("  --pool, -o <URL>          Target Pool URL (default: wss://tru.powgrid.xyz/stratum)");
                 println!("  --wallet, -u <ADDR>       TRU payout wallet address (required)");
@@ -1682,7 +1700,7 @@ fn main() {
     }
 
     dashboard.add_event(format!(
-        "[{}] 🚀 Initialized PowGrid TRU GPU Miner v1.3 ({} GPU{} active)",
+        "[{}] 🚀 Initialized PowGrid TRU GPU Miner v1.3.1 ({} GPU{} active)",
         get_time_str(),
         dashboard.gpus.len(),
         if dashboard.gpus.len() > 1 { "s" } else { "" }
@@ -2104,7 +2122,7 @@ mod tests {
         assert_eq!(visible_len(&border_bot), 78);
 
         let lines = vec![
-            box_row("\x1b[1;36m► POWGRID TRU ($TRU) HIGH-PERFORMANCE TRUHASH GPU MINER v1.3\x1b[0m", 74),
+            box_row("\x1b[1;36m► POWGRID TRU ($TRU) HIGH-PERFORMANCE TRUHASH GPU MINER v1.3.1\x1b[0m", 74),
             two_col_row("\x1b[90mPool:\x1b[0m \x1b[1;37mwss://tru.powgrid.xyz/stratum\x1b[0m", 39, "\x1b[90mStatus:\x1b[0m \x1b[1;32m● ONLINE (Connected)\x1b[0m", 74),
             two_col_row("\x1b[90mWallet:\x1b[0m \x1b[36mTHoa1wiN6U...cJ1e\x1b[0m", 39, "\x1b[90mWorker:\x1b[0m \x1b[1;33mlaptop\x1b[0m \x1b[90m(PPLNS Pool)\x1b[0m", 74),
             box_row("\x1b[1;35mHARDWARE & GPU ENGINE CONFIGURATION (1 GPUs Active)\x1b[0m", 74),
@@ -2120,7 +2138,7 @@ mod tests {
             box_row("[18:54:54] ⚡ New block #27732 work template (diff: 1.80)", 74),
             box_row("[18:54:53] ⚡ Connected to WSS Stratum! Subscribing...", 74),
             box_row("[18:54:53] 🌐 Connecting to Stratum WSS: wss://tru.powgrid.xyz/stratum", 74),
-            box_row("[18:54:53] 🚀 Initialized PowGrid TRU GPU Miner v1.3 (1 GPU active)", 74),
+            box_row("[18:54:53] 🚀 Initialized PowGrid TRU GPU Miner v1.3.1 (1 GPU active)", 74),
         ];
 
         for (i, line) in lines.iter().enumerate() {
