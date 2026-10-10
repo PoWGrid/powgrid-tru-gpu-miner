@@ -127,8 +127,8 @@ fn rpc_call(url: &str, cookie: &str, method: &str, params: serde_json::Value) ->
 
 fn main() {
     let rpc_url = std::env::var("NODE_RPC").unwrap_or_else(|_| "http://127.0.0.1:21842/rpc".to_string());
-    let cookie_path = std::env::var("COOKIE_PATH").unwrap_or_else(|_| "/tmp/tru_sandbox_ncft/node_data/.rpc-cookie-21832".to_string());
-    let miner_wallet = std::env::var("WALLET").unwrap_or_else(|_| "TRU88888rDZc2EAWLBnuc5cY3CUNRd7zWk".to_string());
+    let cookie_path = std::env::var("COOKIE_PATH").unwrap_or_else(|_| ".rpc-cookie".to_string());
+    let miner_wallet = std::env::var("WALLET").unwrap_or_else(|_| "TRU0000000000000000000000000000000000".to_string());
     let target_height: u64 = std::env::var("TARGET_HEIGHT").ok().and_then(|s| s.parse().ok()).unwrap_or(101);
 
     println!("===============================================================");
