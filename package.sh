@@ -6,7 +6,8 @@ rm -rf "$PKG_DIR"
 mkdir -p "$PKG_DIR/linux-x64/powgrid-tru-gpu-miner"
 mkdir -p "$PKG_DIR/hiveos/powgrid-tru-miner"
 
-BIN="/home/user/git_test/projects/tru/repos/pool/powgrid-tru-gpu-miner/target/release/powgrid-tru-gpu-miner"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BIN="$REPO_DIR/target/release/powgrid-tru-gpu-miner"
 cp "$BIN" "$PKG_DIR/linux-x64/powgrid-tru-gpu-miner/"
 cp "$BIN" "$PKG_DIR/hiveos/powgrid-tru-miner/"
 
@@ -57,7 +58,7 @@ READEEOF
 # HiveOS files
 cat << 'MANIFEOF' > "$PKG_DIR/hiveos/powgrid-tru-miner/h-manifest.conf"
 CUSTOM_NAME="powgrid-tru-miner"
-CUSTOM_VERSION="1.3.1"
+CUSTOM_VERSION="1.3.2"
 CUSTOM_BUILD="1"
 CUSTOM_LOG_BASENAME="/var/log/miner/$CUSTOM_NAME/$CUSTOM_NAME"
 CUSTOM_CONFIG_FILENAME="/hive/miners/custom/$CUSTOM_NAME/powgrid.conf"
