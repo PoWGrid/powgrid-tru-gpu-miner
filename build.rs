@@ -11,6 +11,13 @@ fn main() {
     let is_windows = target_os == "windows";
 
     let nvcc_candidates = [
+        "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.8\\bin\\nvcc.exe",
+        "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.6\\bin\\nvcc.exe",
+        "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.4\\bin\\nvcc.exe",
+        "C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.1\\bin\\nvcc.exe",
+        "/usr/local/cuda-12.8/bin/nvcc",
+        "/usr/local/cuda-12/bin/nvcc",
+        "/usr/bin/nvcc",
         "/usr/local/cuda-13.4/bin/nvcc",
         "/usr/local/cuda-13/bin/nvcc",
         "/usr/local/cuda/bin/nvcc",
@@ -57,10 +64,10 @@ fn main() {
         nvcc_cmd.args(&["-gencode", &format!("arch={},code={}", virt, real)]);
         nvcc_cmd.args(&["-gencode", &format!("arch={},code={}", virt, virt)]);
     } else {
-        // Target all supported Jetson embedded and desktop/server architectures:
-        // - compute_53: Jetson Nano, Jetson TX1 (Maxwell)
-        // - compute_62: Jetson TX2 (Pascal)
-        // - compute_72: Jetson AGX Xavier, Xavier NX (Volta)
+        // Target all supported architectures:
+        // - compute_50/52/53: Maxwell (GTX 970/980/750Ti, Jetson Nano)
+        // - compute_60/61/62: Pascal (GP100, GTX 1060/1070/1080/Titan X, Jetson TX2)
+        // - compute_70/72: Volta (Titan V, V100, Jetson Xavier)
         // - compute_75: Turing (RTX 20xx, GTX 16xx)
         // - compute_80: Ampere Datacenter (A100)
         // - compute_86: Ampere Desktop (RTX 30xx)
@@ -70,8 +77,13 @@ fn main() {
         // - compute_100: Blackwell Datacenter (B100/B200 / Jetson Thor)
         // - compute_120: Blackwell Desktop (RTX 50xx)
         let candidate_arches = [
+            ("compute_50", "sm_50"),
+            ("compute_52", "sm_52"),
             ("compute_53", "sm_53"),
+            ("compute_60", "sm_60"),
+            ("compute_61", "sm_61"),
             ("compute_62", "sm_62"),
+            ("compute_70", "sm_70"),
             ("compute_72", "sm_72"),
             ("compute_75", "sm_75"),
             ("compute_80", "sm_80"),
@@ -120,7 +132,7 @@ fn main() {
         if let Ok(cuda_path) = env::var("CUDA_PATH") {
             println!("cargo:rustc-link-search=native={}\\lib\\x64", cuda_path);
         }
-        println!("cargo:rustc-link-lib=cudart");
+        println!("cargo:rustc-link-lib=static=cudart_static");
     } else {
         let obj_path = out_dir.join("tru_cuda.o");
         let lib_path = out_dir.join("libtru_cuda.a");
@@ -149,16 +161,23 @@ fn main() {
         }
 
         println!("cargo:rustc-link-search=native={}", out_dir.display());
-        let cuda_lib_dirs = [
-            "/usr/local/cuda-13.4/targets/x86_64-linux/lib",
-            "/usr/local/cuda-13.4/lib64",
-            "/usr/local/cuda/targets/x86_64-linux/lib",
-            "/usr/local/cuda/targets/aarch64-linux/lib",
-            "/usr/local/cuda/lib64",
-            "/usr/local/cuda/lib",
-            "/usr/lib/aarch64-linux-gnu",
-            "/usr/lib/x86_64-linux-gnu",
-        ];
+        let mut cuda_lib_dirs = Vec::new();
+        if nvcc_path.contains("cuda-13") {
+            cuda_lib_dirs.push("/usr/local/cuda-13.4/targets/x86_64-linux/lib");
+            cuda_lib_dirs.push("/usr/local/cuda-13.4/lib64");
+            cuda_lib_dirs.push("/usr/local/cuda/targets/x86_64-linux/lib");
+            cuda_lib_dirs.push("/usr/local/cuda/lib64");
+            cuda_lib_dirs.push("/usr/lib/x86_64-linux-gnu");
+        } else {
+            cuda_lib_dirs.push("/usr/lib/x86_64-linux-gnu");
+            cuda_lib_dirs.push("/usr/lib/aarch64-linux-gnu");
+            cuda_lib_dirs.push("/usr/local/cuda-12.8/lib64");
+            cuda_lib_dirs.push("/usr/local/cuda-12/lib64");
+            cuda_lib_dirs.push("/usr/local/cuda-13.4/targets/x86_64-linux/lib");
+        }
+        cuda_lib_dirs.push("/usr/local/cuda/targets/aarch64-linux/lib");
+        cuda_lib_dirs.push("/usr/local/cuda/lib");
+
         for dir in &cuda_lib_dirs {
             if std::path::Path::new(dir).exists() {
                 println!("cargo:rustc-link-search=native={}", dir);

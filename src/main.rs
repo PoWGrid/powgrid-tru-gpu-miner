@@ -497,7 +497,7 @@ impl Dashboard {
 
         out.push_str(&border_top);
         if self.is_pool_mode {
-            out.push_str(&box_row("\x1b[1;36m► POWGRID TRU ($TRU) HIGH-PERFORMANCE TRUHASH GPU MINER v1.3.2\x1b[0m", 74));
+            out.push_str(&box_row("\x1b[1;36m► POWGRID TRU ($TRU) HIGH-PERFORMANCE TRUHASH GPU MINER v1.3.3\x1b[0m", 74));
         } else {
             out.push_str(&box_row("\x1b[1;36m► TRU FAT MINER ($TRU) HIGH-SPEED SOLO GPU ENGINE v2.3\x1b[0m", 74));
         }
@@ -1448,7 +1448,7 @@ fn main() {
             }
             "--help" | "-h" => {
                 println!("Usage: powgrid-tru-gpu-miner [OPTIONS]");
-                println!("PowGrid TRU GPU Miner v1.3.2 - Algorithm: TRUHash");
+                println!("PowGrid TRU GPU Miner v1.3.3 - Algorithm: TRUHash");
                 println!("Options:");
                 println!("  --pool, -o <URL>          Target Pool URL (default: wss://tru.powgrid.xyz/stratum)");
                 println!("  --wallet, -u <ADDR>       TRU payout wallet address (required)");
@@ -1712,7 +1712,7 @@ fn main() {
     }
 
     dashboard.add_event(format!(
-        "[{}] 🚀 Initialized PowGrid TRU GPU Miner v1.3.2 ({} GPU{} active)",
+        "[{}] 🚀 Initialized PowGrid TRU GPU Miner v1.3.3 ({} GPU{} active)",
         get_time_str(),
         dashboard.gpus.len(),
         if dashboard.gpus.len() > 1 { "s" } else { "" }
@@ -2134,7 +2134,7 @@ mod tests {
         assert_eq!(visible_len(&border_bot), 78);
 
         let lines = vec![
-            box_row("\x1b[1;36m► POWGRID TRU ($TRU) HIGH-PERFORMANCE TRUHASH GPU MINER v1.3.2\x1b[0m", 74),
+            box_row("\x1b[1;36m► POWGRID TRU ($TRU) HIGH-PERFORMANCE TRUHASH GPU MINER v1.3.3\x1b[0m", 74),
             two_col_row("\x1b[90mPool:\x1b[0m \x1b[1;37mwss://tru.powgrid.xyz/stratum\x1b[0m", 39, "\x1b[90mStatus:\x1b[0m \x1b[1;32m● ONLINE (Connected)\x1b[0m", 74),
             two_col_row("\x1b[90mWallet:\x1b[0m \x1b[36mTRU1111111...1111\x1b[0m", 39, "\x1b[90mWorker:\x1b[0m \x1b[1;33mlaptop\x1b[0m \x1b[90m(PPLNS Pool)\x1b[0m", 74),
             box_row("\x1b[1;35mHARDWARE & GPU ENGINE CONFIGURATION (1 GPUs Active)\x1b[0m", 74),
@@ -2150,7 +2150,7 @@ mod tests {
             box_row("[18:54:54] ⚡ New block #27732 work template (diff: 1.80)", 74),
             box_row("[18:54:53] ⚡ Connected to WSS Stratum! Subscribing...", 74),
             box_row("[18:54:53] 🌐 Connecting to Stratum WSS: wss://tru.powgrid.xyz/stratum", 74),
-            box_row("[18:54:53] 🚀 Initialized PowGrid TRU GPU Miner v1.3.2 (1 GPU active)", 74),
+            box_row("[18:54:53] 🚀 Initialized PowGrid TRU GPU Miner v1.3.3 (1 GPU active)", 74),
         ];
 
         for (i, line) in lines.iter().enumerate() {

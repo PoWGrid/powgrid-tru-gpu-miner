@@ -484,6 +484,14 @@ extern "C" int cuda_miner_get_device_info(int device_id, CudaDeviceInfo* out_inf
         snprintf(out_info->arch_name, sizeof(out_info->arch_name), "Ampere (sm_80)");
     } else if (prop.major == 7 && prop.minor == 5) {
         snprintf(out_info->arch_name, sizeof(out_info->arch_name), "Turing (sm_75)");
+    } else if (prop.major == 7 && prop.minor == 0) {
+        snprintf(out_info->arch_name, sizeof(out_info->arch_name), "Volta (sm_70)");
+    } else if (prop.major == 6 && prop.minor == 1) {
+        snprintf(out_info->arch_name, sizeof(out_info->arch_name), "Pascal (sm_61)");
+    } else if (prop.major == 6 && prop.minor == 0) {
+        snprintf(out_info->arch_name, sizeof(out_info->arch_name), "Pascal (sm_60)");
+    } else if (prop.major == 5) {
+        snprintf(out_info->arch_name, sizeof(out_info->arch_name), "Maxwell (sm_%d%d)", prop.major, prop.minor);
     } else {
         snprintf(out_info->arch_name, sizeof(out_info->arch_name), "sm_%d%d", prop.major, prop.minor);
     }
